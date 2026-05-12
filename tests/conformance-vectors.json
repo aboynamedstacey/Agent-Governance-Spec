@@ -1,0 +1,723 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Governance Specification \u2014 Conformance Test Vectors",
+  "description": "Test cases that conforming implementations MUST produce identical results for. Each test defines an input (agent identity, action, parameters) and expected output (decision, tier, reason code).",
+  "version": "0.5.0-draft",
+  "test_suites": [
+    {
+      "suite": "pattern_matching",
+      "description": "Action pattern matching algorithm (Appendix D.1)",
+      "tests": [
+        {
+          "id": "PM-001",
+          "description": "Exact match succeeds",
+          "input": {
+            "action_type": "gmail.drafts.create",
+            "pattern": "gmail.drafts.create"
+          },
+          "expected": true
+        },
+        {
+          "id": "PM-002",
+          "description": "Exact match fails on different action",
+          "input": {
+            "action_type": "gmail.drafts.delete",
+            "pattern": "gmail.drafts.create"
+          },
+          "expected": false
+        },
+        {
+          "id": "PM-003",
+          "description": "Wildcard matches child actions",
+          "input": {
+            "action_type": "gmail.drafts.create",
+            "pattern": "gmail.drafts.*"
+          },
+          "expected": true
+        },
+        {
+          "id": "PM-004",
+          "description": "Wildcard does not match sibling namespace",
+          "input": {
+            "action_type": "gmail.messages.send",
+            "pattern": "gmail.drafts.*"
+          },
+          "expected": false
+        },
+        {
+          "id": "PM-005",
+          "description": "Top-level wildcard matches everything",
+          "input": {
+            "action_type": "database.write.bulk",
+            "pattern": "*"
+          },
+          "expected": true
+        },
+        {
+          "id": "PM-006",
+          "description": "Broad namespace wildcard matches nested actions",
+          "input": {
+            "action_type": "gmail.drafts.create",
+            "pattern": "gmail.*"
+          },
+          "expected": true
+        },
+        {
+          "id": "PM-007",
+          "description": "Wildcard matches the prefix itself",
+          "input": {
+            "action_type": "gmail.drafts",
+            "pattern": "gmail.drafts.*"
+          },
+          "expected": true
+        },
+        {
+          "id": "PM-008",
+          "description": "Wildcard does not match partial prefix",
+          "input": {
+            "action_type": "gmail_extra.drafts.create",
+            "pattern": "gmail.*"
+          },
+          "expected": false
+        },
+        {
+          "id": "PM-009",
+          "description": "Empty action type never matches non-wildcard",
+          "input": {
+            "action_type": "",
+            "pattern": "gmail.drafts.create"
+          },
+          "expected": false
+        },
+        {
+          "id": "PM-010",
+          "description": "Empty action type matches universal wildcard",
+          "input": {
+            "action_type": "",
+            "pattern": "*"
+          },
+          "expected": true
+        }
+      ]
+    },
+    {
+      "suite": "scope_subset",
+      "description": "Scope subset comparison for delegation attenuation (Appendix D.3)",
+      "tests": [
+        {
+          "id": "SS-001",
+          "description": "Identical scopes are subsets of each other",
+          "parent_patterns": [
+            "gmail.drafts.*"
+          ],
+          "child_patterns": [
+            "gmail.drafts.*"
+          ],
+          "expected": true
+        },
+        {
+          "id": "SS-002",
+          "description": "Narrower child pattern is subset of broader parent",
+          "parent_patterns": [
+            "gmail.*"
+          ],
+          "child_patterns": [
+            "gmail.drafts.*"
+          ],
+          "expected": true
+        },
+        {
+          "id": "SS-003",
+          "description": "Broader child pattern is NOT subset of narrower parent",
+          "parent_patterns": [
+            "gmail.drafts.*"
+          ],
+          "child_patterns": [
+            "gmail.*"
+          ],
+          "expected": false
+        },
+        {
+          "id": "SS-004",
+          "description": "Child with unrelated action is NOT subset",
+          "parent_patterns": [
+            "gmail.*"
+          ],
+          "child_patterns": [
+            "gmail.drafts.*",
+            "calendar.events.create"
+          ],
+          "expected": false
+        },
+        {
+          "id": "SS-005",
+          "description": "Universal parent covers any child",
+          "parent_patterns": [
+            "*"
+          ],
+          "child_patterns": [
+            "gmail.drafts.create",
+            "database.query"
+          ],
+          "expected": true
+        },
+        {
+          "id": "SS-006",
+          "description": "Exact child pattern under parent wildcard",
+          "parent_patterns": [
+            "database.*"
+          ],
+          "child_patterns": [
+            "database.query"
+          ],
+          "expected": true
+        }
+      ]
+    },
+    {
+      "suite": "policy_evaluation",
+      "description": "End-to-end policy evaluation (first-match-wins with constraints)",
+      "policy": {
+        "rules": [
+          {
+            "pattern": "gmail.threads.get",
+            "decision": "ALLOW",
+            "constraints": []
+          },
+          {
+            "pattern": "gmail.drafts.create",
+            "decision": "ALLOW",
+            "constraints": [
+              {
+                "field": "recipient_domain",
+                "operator": "NOT_IN",
+                "value": [
+                  "competitor.com",
+                  "regulator.gov"
+                ]
+              },
+              {
+                "field": "recipient_count",
+                "operator": "LESS_THAN_OR_EQUAL",
+                "value": 10
+              }
+            ]
+          },
+          {
+            "pattern": "gmail.messages.send",
+            "decision": "ESCALATE",
+            "constraints": []
+          },
+          {
+            "pattern": "agent.spawn",
+            "decision": "DENY",
+            "constraints": []
+          }
+        ],
+        "default": "DENY"
+      },
+      "tests": [
+        {
+          "id": "PE-001",
+          "description": "Simple allow \u2014 action in scope, no constraints",
+          "action_type": "gmail.threads.get",
+          "params": {},
+          "expected_decision": "ALLOW",
+          "expected_tier": 1
+        },
+        {
+          "id": "PE-002",
+          "description": "Allow with satisfied constraints",
+          "action_type": "gmail.drafts.create",
+          "params": {
+            "recipient_domain": "partner.com",
+            "recipient_count": 3
+          },
+          "expected_decision": "ALLOW",
+          "expected_tier": 2
+        },
+        {
+          "id": "PE-003",
+          "description": "Deny \u2014 constraint violation (blocked domain)",
+          "action_type": "gmail.drafts.create",
+          "params": {
+            "recipient_domain": "competitor.com",
+            "recipient_count": 1
+          },
+          "expected_decision": "DENY",
+          "expected_tier": 2,
+          "expected_reason": "CONSTRAINT_VIOLATION"
+        },
+        {
+          "id": "PE-004",
+          "description": "Attenuate \u2014 numeric constraint exceeded",
+          "action_type": "gmail.drafts.create",
+          "params": {
+            "recipient_domain": "partner.com",
+            "recipient_count": 25
+          },
+          "expected_decision": "ATTENUATE",
+          "expected_tier": 2,
+          "expected_reason": "CONSTRAINT_VIOLATION"
+        },
+        {
+          "id": "PE-005",
+          "description": "Escalate \u2014 policy mandates human review",
+          "action_type": "gmail.messages.send",
+          "params": {
+            "to": "anyone@example.com"
+          },
+          "expected_decision": "ESCALATE",
+          "expected_tier": 1,
+          "expected_reason": "ESCALATION_REQUIRED"
+        },
+        {
+          "id": "PE-006",
+          "description": "Deny \u2014 explicit deny rule",
+          "action_type": "agent.spawn",
+          "params": {},
+          "expected_decision": "DENY",
+          "expected_tier": 1,
+          "expected_reason": "POLICY_MATCH_DENY"
+        },
+        {
+          "id": "PE-007",
+          "description": "Deny \u2014 no rule matches (default deny)",
+          "action_type": "calendar.events.create",
+          "params": {},
+          "expected_decision": "DENY",
+          "expected_tier": 1,
+          "expected_reason": "UNMATCHED_ACTION"
+        },
+        {
+          "id": "PE-008",
+          "description": "Deny \u2014 expired identity",
+          "action_type": "gmail.threads.get",
+          "params": {},
+          "identity_state": "expired",
+          "expected_decision": "DENY",
+          "expected_tier": 1,
+          "expected_reason": "IDENTITY_EXPIRED"
+        },
+        {
+          "id": "PE-009",
+          "description": "Deny \u2014 revoked authority",
+          "action_type": "gmail.threads.get",
+          "params": {},
+          "identity_state": "authority_revoked",
+          "expected_decision": "DENY",
+          "expected_tier": 1,
+          "expected_reason": "AUTHORITY_EXPIRED"
+        },
+        {
+          "id": "PE-mixed",
+          "description": "ALLOW rule with mixed-failure (categorical NOT_IN + numeric LTE both failing) MUST DENY, not ATTENUATE \u2014 prevents authority leak",
+          "policy_override": [
+            {
+              "pattern": "gmail.drafts.create",
+              "decision": "ALLOW",
+              "constraints": [
+                {
+                  "field": "recipient_domain",
+                  "operator": "NOT_IN",
+                  "value": [
+                    "competitor.com",
+                    "regulator.gov"
+                  ]
+                },
+                {
+                  "field": "recipient_count",
+                  "operator": "LESS_THAN_OR_EQUAL",
+                  "value": 10
+                }
+              ]
+            }
+          ],
+          "action_type": "gmail.drafts.create",
+          "params": {
+            "recipient_domain": "competitor.com",
+            "recipient_count": 25
+          },
+          "expected_decision": "DENY",
+          "expected_tier": 2,
+          "expected_reason": "CONSTRAINT_VIOLATION",
+          "note": "Both constraints fail; the categorical NOT_IN failure makes the rule non-attenuable per Patch 1 (all-failing-attenuable check). Two implementations diverging here would silently leak authority by clamping recipient_count and dropping the domain check."
+        },
+        {
+          "id": "PE-ocf-001",
+          "description": "on_constraint_fail directive routes constraint failure on a non-ALLOW rule to the author-declared decision",
+          "policy_override": [
+            {
+              "pattern": "database.write",
+              "decision": "ESCALATE",
+              "constraints": [
+                {
+                  "field": "record_count",
+                  "operator": "GREATER_THAN",
+                  "value": 50
+                }
+              ],
+              "on_constraint_fail": "ALLOW"
+            }
+          ],
+          "cases": [
+            {
+              "id": "PE-ocf-001a",
+              "description": "Constraint satisfied \u2192 ESCALATE",
+              "action_type": "database.write",
+              "params": {
+                "record_count": 100
+              },
+              "expected_decision": "ESCALATE",
+              "expected_tier": 2
+            },
+            {
+              "id": "PE-ocf-001b",
+              "description": "Constraint failed \u2192 on_constraint_fail=ALLOW fires",
+              "action_type": "database.write",
+              "params": {
+                "record_count": 25
+              },
+              "expected_decision": "ALLOW",
+              "expected_tier": 2
+            }
+          ],
+          "note": "Exercises Patch 2 on_constraint_fail with non-ALLOW base decision. attenuation does not apply (decision != ALLOW), so on_constraint_fail is reached."
+        },
+        {
+          "id": "PE-att-mf",
+          "description": "ALLOW rule with two failing LTE constraints on different fields \u2192 ATTENUATE clamping both fields",
+          "policy_override": [
+            {
+              "pattern": "database.write",
+              "decision": "ALLOW",
+              "constraints": [
+                {
+                  "field": "record_count",
+                  "operator": "LESS_THAN_OR_EQUAL",
+                  "value": 50
+                },
+                {
+                  "field": "batch_size_kb",
+                  "operator": "LESS_THAN_OR_EQUAL",
+                  "value": 1024
+                }
+              ]
+            }
+          ],
+          "action_type": "database.write",
+          "params": {
+            "record_count": 100,
+            "batch_size_kb": 4096
+          },
+          "expected_decision": "ATTENUATE",
+          "expected_tier": 2,
+          "expected_clamps": {
+            "record_count": 50,
+            "batch_size_kb": 1024
+          },
+          "note": "Both constraints fail and both are LTE on finite numeric \u2192 can_attenuate returns true. Attenuation clamps both fields to their respective bounds. Audit record (ActionEvaluated.attenuation) lists both constraints."
+        }
+      ]
+    },
+    {
+      "suite": "delegation",
+      "description": "Delegation attenuation and cascade behavior",
+      "tests": [
+        {
+          "id": "DL-001",
+          "description": "Child with valid subset scope succeeds",
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.*",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": true,
+              "max_depth": 2,
+              "max_breadth": 4,
+              "delegatable_scope": {
+                "authorized_actions": [
+                  {
+                    "pattern": "database.query",
+                    "decision": "ALLOW"
+                  }
+                ],
+                "delegation": {
+                  "can_delegate": false,
+                  "max_depth": 0,
+                  "max_breadth": 0
+                }
+              }
+            }
+          },
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.query",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": false,
+              "max_depth": 0,
+              "max_breadth": 0
+            }
+          },
+          "expected": "identity_created"
+        },
+        {
+          "id": "DL-002",
+          "description": "Child requesting action not in parent delegatable scope fails",
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.*",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": true,
+              "max_depth": 2,
+              "max_breadth": 4,
+              "delegatable_scope": {
+                "authorized_actions": [
+                  {
+                    "pattern": "database.query",
+                    "decision": "ALLOW"
+                  }
+                ],
+                "delegation": {
+                  "can_delegate": false,
+                  "max_depth": 0,
+                  "max_breadth": 0
+                }
+              }
+            }
+          },
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.write",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": false,
+              "max_depth": 0,
+              "max_breadth": 0
+            }
+          },
+          "expected": "rejected",
+          "expected_reason": "DELEGATION_SCOPE_VIOLATION"
+        },
+        {
+          "id": "DL-003",
+          "description": "Delegation depth exceeded",
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.*",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": true,
+              "max_depth": 1,
+              "max_breadth": 4,
+              "delegatable_scope": {
+                "authorized_actions": [
+                  {
+                    "pattern": "database.query",
+                    "decision": "ALLOW"
+                  }
+                ],
+                "delegation": {
+                  "can_delegate": false,
+                  "max_depth": 0,
+                  "max_breadth": 0
+                }
+              }
+            }
+          },
+          "parent_depth": 1,
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.query",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": false,
+              "max_depth": 0,
+              "max_breadth": 0
+            }
+          },
+          "expected": "rejected",
+          "expected_reason": "DELEGATION_DEPTH_EXCEEDED"
+        },
+        {
+          "id": "DL-004",
+          "description": "Parent without delegation rights cannot spawn",
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.*",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": false,
+              "max_depth": 0,
+              "max_breadth": 4
+            }
+          },
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "database.query",
+                "decision": "ALLOW"
+              }
+            ],
+            "delegation": {
+              "can_delegate": false,
+              "max_depth": 0,
+              "max_breadth": 0
+            }
+          },
+          "expected": "rejected",
+          "expected_reason": "SCOPE_VIOLATION"
+        },
+        {
+          "id": "DL-005",
+          "description": "Parent termination cascades to child",
+          "setup": "parent spawns child, parent is terminated",
+          "expected_child_state": "terminated",
+          "expected_child_reason": "CASCADED"
+        },
+        {
+          "id": "DL-006",
+          "description": "Cascaded child's actions are denied",
+          "setup": "parent terminated, child attempts action",
+          "expected_decision": "DENY",
+          "expected_reason": "IDENTITY_EXPIRED"
+        }
+      ]
+    },
+    {
+      "suite": "escalation_lifecycle",
+      "description": "End-to-end escalation with timeout and candidate rule promotion",
+      "tests": [
+        {
+          "id": "EL-001",
+          "description": "Escalation resolved with APPROVE and candidate rule",
+          "action_type": "gmail.messages.send",
+          "escalation_decision": "APPROVE",
+          "justification": "Verified recipient is authorized external contact for this project",
+          "expected_events": [
+            "ActionRequested",
+            "ActionEvaluated",
+            "ActionEscalated",
+            "EscalationResolved",
+            "ActionExecuted"
+          ]
+        },
+        {
+          "id": "EL-002",
+          "description": "Escalation times out \u2014 default deny applied",
+          "action_type": "gmail.messages.send",
+          "timeout": "15m",
+          "human_responds": false,
+          "expected_decision": "DENY",
+          "expected_events": [
+            "ActionRequested",
+            "ActionEvaluated",
+            "ActionEscalated",
+            "EscalationTimedOut"
+          ]
+        },
+        {
+          "id": "EL-003",
+          "description": "Escalation resolved with MODIFY \u2014 re-evaluated against same policy returns ALLOW via on_constraint_fail",
+          "policy": [
+            {
+              "pattern": "database.write",
+              "decision": "ESCALATE",
+              "constraints": [
+                {
+                  "field": "record_count",
+                  "operator": "GREATER_THAN",
+                  "value": 50
+                }
+              ],
+              "on_constraint_fail": "ALLOW"
+            }
+          ],
+          "action_type": "database.write",
+          "original_params": {
+            "record_count": 100
+          },
+          "escalation_decision": "MODIFY",
+          "modified_action": {
+            "original_action": {
+              "action_type": "database.write",
+              "params": {
+                "record_count": 100
+              },
+              "resource": {
+                "resource_type": "database",
+                "resource_id": "orders"
+              }
+            },
+            "modified_action": {
+              "action_type": "database.write",
+              "params": {
+                "record_count": 25
+              },
+              "resource": {
+                "resource_type": "database",
+                "resource_id": "orders"
+              }
+            },
+            "modifications": [
+              {
+                "field": "record_count",
+                "original_value": 100,
+                "attenuated_value": 25
+              }
+            ],
+            "requires_reevaluation": true
+          },
+          "expected_events": [
+            "ActionRequested",
+            "ActionEvaluated",
+            "ActionEscalated",
+            "EscalationResolved",
+            "ActionEvaluated",
+            "ActionExecuted"
+          ],
+          "note": "Second ActionEvaluated re-runs the policy against modified_action.params; record_count=25 fails the GT 50 constraint, on_constraint_fail=ALLOW fires, ActionExecuted follows. Tests Patch 2 author-wins precedence."
+        },
+        {
+          "id": "EL-004",
+          "description": "Candidate rule promotion requires separate approver",
+          "candidate_rule_proposer": "human:alice@org",
+          "candidate_rule_approver": "human:bob@org",
+          "expected": "promoted",
+          "note": "Proposer and approver MUST be different identities"
+        },
+        {
+          "id": "EL-005",
+          "description": "Candidate rule self-approval rejected",
+          "candidate_rule_proposer": "human:alice@org",
+          "candidate_rule_approver": "human:alice@org",
+          "expected": "rejected",
+          "note": "Same person cannot propose and approve"
+        }
+      ]
+    }
+  ]
+}

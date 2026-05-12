@@ -1,0 +1,154 @@
+# Example: Authority Grant and Policy for an Email-Drafting Agent
+#
+# This is a non-normative example showing how the specification's
+# contracts and type definitions (Appendix C) translate to a concrete
+# policy definition. Field names map to the types defined in Appendix C.
+#
+# NOTE: YAML is one possible serialization. The specification does not
+# mandate a serialization format. This example uses YAML for readability.
+
+# ─── Authority Grant (Section 3.1, Appendix C.2-C.6) ───
+
+authority_grant:
+  grant_id: "grant-email-drafter-2026-04"
+  agent_type: "email-drafter"
+  ttl: "8h"                                # Guarantee 9: no permanent grants
+  granted_by: "human:jane.smith@org"        # Guarantee 2: human origin
+  granted_at: "2026-04-11T09:00:00Z"
+  policy_version: "1.0.0"
+
+  # ─── PolicyScope (Appendix C.2) ───
+  scope:
+    authorized_actions:                     # ActionPattern[]
+      - pattern: "gmail.threads.get"
+        decision: ALLOW
+        constraints:                        # ParameterConstraint[]
+          - field: "account_owner"
+            operator: EQUALS
+            value: "${agent.task_context.user_id}"
+
+      - pattern: "gmail.drafts.create"
+        decision: ALLOW
+        constraints:
+          - field: "recipient_domain"
+            operator: NOT_IN
+            value: ["competitor.com", "regulator.gov"]
+          - field: "recipient_count"
+            operator: LESS_THAN_OR_EQUAL
+            value: 10
+
+      - pattern: "gmail.drafts.create"
+        decision: ESCALATE
+        constraints:
+          - field: "recipient_domain"
+            operator: IN
+            value: ["competitor.com", "regulator.gov"]
+        escalation:
+          always_escalate: []
+          escalate_when: []
+          notify: ["user", "compliance"]
+          timeout: "30m"
+          on_timeout: DENY
+          default_risk_level: HIGH
+
+      - pattern: "gmail.messages.send"
+        decision: ESCALATE
+        escalation:
+          always_escalate: ["gmail.messages.send"]
+          escalate_when: []
+          notify: ["user"]
+          timeout: "15m"
+          on_timeout: DENY
+          default_risk_level: HIGH
+
+      - pattern: "gmail.*"
+        decision: DENY                     # Catch-all for gmail actions not above
+        constraints:
+          - field: "account_owner"
+            operator: NOT_EQUALS
+            value: "${agent.task_context.user_id}"
+
+      - pattern: "agent.spawn"
+        decision: DENY
+
+    # Default: anything not matched by authorized_actions is DENY
+    # (first-match-wins; no match = deny)
+
+    resource_constraints:                   # ResourceConstraint[]
+      - resource_pattern: "gmail-api-*"
+        access_level: ACCESS_READ
+
+    parameter_constraints: []               # Global constraints (none for this agent)
+
+    output_policy:                          # OutputPolicy (Appendix C.2)
+      authorized_output_types:
+        - INTERNAL_SUMMARY
+        - CUSTOMER_FACING                   # Email drafts are customer-facing output
+      synchronous_channels:
+        - audience: EXTERNAL_CUSTOMER
+          output_type: null                 # Any type to external customers is sync
+        - audience: ANOTHER_AGENT
+          output_type: null                 # Any type to other agents is sync
+      scope_keywords:
+        - "email"
+        - "draft"
+        - "correspondence"
+        - "message"
+        - "thread"
+      out_of_scope_keywords:
+        - "financial analysis"
+        - "legal advice"
+        - "code generation"
+
+    delegation:                             # DelegationRule (Appendix C.3)
+      can_delegate: false
+      max_depth: 0
+      max_breadth: 0
+      delegatable_scope: null
+      allowed_child_types: null
+      child_ttl_max: null
+
+  # ─── EscalationRule (Appendix C.4) ───
+  escalation_policy:
+    always_escalate:
+      - "gmail.messages.send"
+    escalate_when:
+      - action_pattern: "gmail.drafts.create"
+        conditions:
+          - field: "recipient_domain"
+            operator: IN
+            value: ["competitor.com", "regulator.gov"]
+        notify: ["user", "compliance"]
+        timeout: "30m"
+        on_timeout: DENY
+    notify: ["user"]
+    timeout: "15m"
+    on_timeout: DENY
+    default_risk_level: MEDIUM
+
+  # ─── RateLimit[] (Appendix C.5) ───
+  rate_limits:
+    - action_pattern: "gmail.drafts.create"
+      max_count: 20
+      window: "1h"
+      window_type: SLIDING
+      scope: INSTANCE
+      on_exceed: DENY
+
+    - action_pattern: "gmail.threads.get"
+      max_count: 100
+      window: "1h"
+      window_type: SLIDING
+      scope: INSTANCE
+      on_exceed: DENY
+
+  # ─── DamageBudget (Appendix C.6) ───
+  damage_budget:
+    budgets:
+      - metric: "external_recipients"
+        threshold: 50
+        window: "8h"                       # Matches grant TTL
+        scope: INSTANCE
+        accumulator: "params.recipients.length"
+        on_exceed: ESCALATE
+        evaluation_tier: 2                 # Simple count check

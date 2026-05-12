@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-governance-spec.dev/schemas/types.schema.json",
+  "title": "Agent Governance Specification — Core Type Definitions",
+  "description": "Machine-readable schemas for all types defined in Appendix C of the specification. These schemas are normative for interoperability.",
+  "$defs": {
+    "Decision": {
+      "type": "string",
+      "enum": ["ALLOW", "DENY", "ESCALATE", "ATTENUATE"]
+    },
+    "OutputDecision": {
+      "type": "string",
+      "enum": ["RELEASE", "SUPPRESS", "ESCALATE", "REVISE"]
+    },
+    "EscalationDecision": {
+      "type": "string",
+      "enum": ["APPROVE", "DENY", "MODIFY"]
+    },
+    "TerminationReason": {
+      "type": "string",
+      "enum": ["COMPLETED", "EXPIRED", "REVOKED", "ERROR", "CASCADED", "KILLED"]
+    },
+    "GrantTerminationReason": {
+      "type": "string",
+      "enum": ["EXPIRED", "REVOKED", "CASCADED"],
+      "description": "Why an authority grant ended. EXPIRED = TTL elapsed (system-driven). REVOKED = explicit human revocation. CASCADED = parent grant was terminated."
+    },
+    "TrustTier": {
+      "type": "string",
+      "enum": ["HIGH", "MEDIUM", "LOW", "RESTRICTED"]
+    },
+    "RiskLevel": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    },
+    "OutputType": {
+      "type": "string",
+      "enum": ["RECOMMENDATION", "FACTUAL_CLAIM", "INSTRUCTION_TO_AGENT", "CUSTOMER_FACING", "INTERNAL_SUMMARY"]
+    },
+    "Audience": {
+      "type": "string",
+      "enum": ["HUMAN_OPERATOR", "ANOTHER_AGENT", "EXTERNAL_CUSTOMER", "INTERNAL_SYSTEM"]
+    },
+    "ReasonCode": {
+      "type": "string",
+      "enum": [
+        "IDENTITY_INVALID",
+        "IDENTITY_EXPIRED",
+        "AUTHORITY_EXPIRED",
+        "AUTHORITY_REVOKED",
+        "SCOPE_VIOLATION",
+        "RATE_LIMIT_EXCEEDED",
+        "DAMAGE_BUDGET_EXCEEDED",
+        "DELEGATION_DEPTH_EXCEEDED",
+        "DELEGATION_SCOPE_VIOLATION",
+        "CONSTRAINT_VIOLATION",
+        "TRUST_INSUFFICIENT",
+        "BEHAVIORAL_ANOMALY",
+        "AGGREGATE_THRESHOLD",
+        "VELOCITY_ANOMALY",
+        "POLICY_MATCH_DENY",
+        "ESCALATION_REQUIRED",
+        "OUTPUT_SCOPE_MISALIGNED",
+        "UNMATCHED_ACTION"
+      ]
+    },
+    "CapabilityClass": {
+      "type": "string",
+      "enum": [
+        "DATA_READ",
+        "DATA_WRITE",
+        "DATA_DELETE",
+        "EXTERNAL_COMMS",
+        "INTERNAL_COMMS",
+        "FINANCIAL_TRANSACTION",
+        "AGENT_SPAWN",
+        "SYSTEM_CONFIG",
+        "CUSTOMER_FACING_OUTPUT"
+      ],
+      "description": "Base capability classes. Implementations MAY define additional classes as strings."
+    },
+    "ConstraintOperator": {
+      "type": "string",
+      "enum": [
+        "EQUALS", "NOT_EQUALS",
+        "LESS_THAN", "LESS_THAN_OR_EQUAL",
+        "GREATER_THAN", "GREATER_THAN_OR_EQUAL",
+        "IN", "NOT_IN",
+        "MATCHES", "NOT_MATCHES",
+        "EXISTS", "NOT_EXISTS"
+      ]
+    },
+    "AccessLevel": {
+      "type": "string",
+      "enum": ["ACCESS_READ", "ACCESS_WRITE", "ACCESS_DELETE", "ACCESS_EXECUTE"]
+    },
+    "RateLimitScope": {
+      "type": "string",
+      "enum": ["INSTANCE", "TYPE", "DELEGATION_TREE"]
+    },
+    "WindowType": {
+      "type": "string",
+      "enum": ["SLIDING", "FIXED"]
+    },
+    "ParameterConstraint": {
+      "type": "object",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Dot-notation path into action params or variable reference (${agent.task_context.user_id})"
+        },
+        "operator": { "$ref": "#/$defs/ConstraintOperator" },
+        "value": {
+          "description": "The comparison value. Type depends on operator."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Condition": {
+      "type": "object",
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "type": "string" },
+        "operator": { "$ref": "#/$defs/ConstraintOperator" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "ResourceConstraint": {
+      "type": "object",
+      "required": ["resource_pattern", "access_level"],
+      "properties": {
+        "resource_pattern": { "type": "string" },
+        "access_level": { "$ref": "#/$defs/AccessLevel" },
+        "classification_max": { "type": ["string", "null"] },
+        "conditions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Condition" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EscalationRule": {
+      "type": "object",
+      "required": ["always_escalate", "notify", "timeout", "on_timeout", "default_risk_level"],
+      "properties": {
+        "always_escalate": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Action patterns that always require human review"
+        },
+        "escalate_when": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConditionalEscalation" }
+        },
+        "notify": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "timeout": { "type": "string", "format": "duration" },
+        "on_timeout": { "$ref": "#/$defs/Decision" },
+        "default_risk_level": { "$ref": "#/$defs/RiskLevel" }
+      },
+      "additionalProperties": false
+    },
+    "ConditionalEscalation": {
+      "type": "object",
+      "required": ["action_pattern", "conditions"],
+      "properties": {
+        "action_pattern": { "type": "string" },
+        "conditions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Condition" }
+        },
+        "notify": { "type": "array", "items": { "type": "string" } },
+        "timeout": { "type": ["string", "null"], "format": "duration" },
+        "on_timeout": { "$ref": "#/$defs/Decision" }
+      },
+      "additionalProperties": false
+    },
+    "SyncChannelRule": {
+      "type": "object",
+      "properties": {
+        "audience": { "oneOf": [{ "$ref": "#/$defs/Audience" }, { "type": "null" }] },
+        "output_type": { "oneOf": [{ "$ref": "#/$defs/OutputType" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "OutputPolicy": {
+      "type": "object",
+      "required": ["authorized_output_types", "synchronous_channels"],
+      "properties": {
+        "authorized_output_types": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/OutputType" }
+        },
+        "synchronous_channels": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SyncChannelRule" }
+        },
+        "scope_keywords": { "type": "array", "items": { "type": "string" } },
+        "out_of_scope_keywords": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ActionPattern": {
+      "type": "object",
+      "required": ["pattern", "decision"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Action type pattern. Exact match, prefix.* wildcard, or * for all."
+        },
+        "decision": { "$ref": "#/$defs/Decision" },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ParameterConstraint" }
+        },
+        "on_constraint_fail": {
+          "anyOf": [
+            { "enum": ["ALLOW", "DENY", "ESCALATE"] },
+            { "type": "null" }
+          ],
+          "description": "Decision when constraints present and not satisfied. When non-null, takes precedence over attenuation. Null (default) defers to attenuation for ALLOW rules and to DENY otherwise. MUST be null if constraints is empty. MUST NOT be ATTENUATE (enforced by enum)."
+        },
+        "escalation": { "$ref": "#/$defs/EscalationRule" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              { "not": { "required": ["constraints"] } },
+              { "properties": { "constraints": { "maxItems": 0 } } }
+            ]
+          },
+          "then": {
+            "anyOf": [
+              { "not": { "required": ["on_constraint_fail"] } },
+              { "properties": { "on_constraint_fail": { "type": "null" } } }
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "DelegationRule": {
+      "type": "object",
+      "required": ["can_delegate", "max_depth", "max_breadth"],
+      "properties": {
+        "can_delegate": { "type": "boolean" },
+        "max_depth": { "type": "integer", "minimum": 0 },
+        "max_breadth": { "type": "integer", "minimum": 0 },
+        "delegatable_scope": {
+          "oneOf": [{ "$ref": "#/$defs/PolicyScope" }, { "type": "null" }]
+        },
+        "allowed_child_types": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "null" }
+          ]
+        },
+        "child_ttl_max": { "type": ["string", "null"], "format": "duration" }
+      },
+      "additionalProperties": false
+    },
+    "PolicyScope": {
+      "type": "object",
+      "required": ["authorized_actions", "delegation"],
+      "properties": {
+        "authorized_actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ActionPattern" },
+          "description": "Ordered list. Evaluated first-match-wins."
+        },
+        "resource_constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ResourceConstraint" }
+        },
+        "parameter_constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ParameterConstraint" }
+        },
+        "output_policy": { "$ref": "#/$defs/OutputPolicy" },
+        "delegation": { "$ref": "#/$defs/DelegationRule" }
+      },
+      "additionalProperties": false
+    },
+    "RateLimit": {
+      "type": "object",
+      "required": ["action_pattern", "max_count", "window", "window_type", "scope", "on_exceed"],
+      "properties": {
+        "action_pattern": { "type": "string" },
+        "max_count": { "type": "integer", "minimum": 1 },
+        "window": { "type": "string", "format": "duration" },
+        "window_type": { "$ref": "#/$defs/WindowType" },
+        "scope": { "$ref": "#/$defs/RateLimitScope" },
+        "on_exceed": { "$ref": "#/$defs/Decision" }
+      },
+      "additionalProperties": false
+    },
+    "BudgetEntry": {
+      "type": "object",
+      "required": ["metric", "threshold", "window", "scope", "accumulator", "on_exceed", "evaluation_tier"],
+      "properties": {
+        "metric": { "type": "string" },
+        "threshold": { "type": "number" },
+        "window": { "type": "string", "format": "duration" },
+        "scope": { "$ref": "#/$defs/RateLimitScope" },
+        "accumulator": { "type": "string" },
+        "on_exceed": { "$ref": "#/$defs/Decision" },
+        "evaluation_tier": { "type": "integer", "enum": [2, 3] }
+      },
+      "additionalProperties": false
+    },
+    "DamageBudget": {
+      "type": "object",
+      "required": ["budgets"],
+      "properties": {
+        "budgets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/BudgetEntry" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskContext": {
+      "type": "object",
+      "required": ["task_id", "task_description", "initiated_by", "initiated_at"],
+      "properties": {
+        "task_id": { "type": "string" },
+        "task_description": { "type": "string" },
+        "initiated_by": { "type": "string" },
+        "initiated_at": { "type": "string", "format": "date-time" },
+        "parameters": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "ResourceDescriptor": {
+      "type": "object",
+      "required": ["resource_type", "resource_id"],
+      "properties": {
+        "resource_type": { "type": "string" },
+        "resource_id": { "type": "string" },
+        "classification": { "type": ["string", "null"] },
+        "attributes": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "ActionDescriptor": {
+      "type": "object",
+      "required": ["action_type", "params", "resource"],
+      "properties": {
+        "action_type": { "type": "string" },
+        "params": { "type": "object" },
+        "resource": { "$ref": "#/$defs/ResourceDescriptor" }
+      },
+      "additionalProperties": false
+    },
+    "ErrorInfo": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ActionOutcome": {
+      "type": "object",
+      "required": ["status", "duration_ms"],
+      "properties": {
+        "status": { "type": "string", "enum": ["SUCCESS", "FAILURE", "TIMEOUT", "PARTIAL"] },
+        "result": {},
+        "error": { "oneOf": [{ "$ref": "#/$defs/ErrorInfo" }, { "type": "null" }] },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "Modification": {
+      "type": "object",
+      "required": ["field", "original_value", "attenuated_value", "reason", "policy_rule"],
+      "properties": {
+        "field": { "type": "string" },
+        "original_value": {},
+        "attenuated_value": {},
+        "reason": { "type": "string" },
+        "policy_rule": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "Attenuation": {
+      "type": "object",
+      "required": ["original_action", "attenuated_action", "modifications"],
+      "properties": {
+        "original_action": { "$ref": "#/$defs/ActionDescriptor" },
+        "attenuated_action": { "$ref": "#/$defs/ActionDescriptor" },
+        "modifications": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Modification" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvaluationRecord": {
+      "type": "object",
+      "required": ["decision", "tier", "reason_code", "policy_version", "evaluation_time_ms"],
+      "properties": {
+        "decision": { "$ref": "#/$defs/Decision" },
+        "tier": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "reason_code": { "$ref": "#/$defs/ReasonCode" },
+        "reason_detail": { "type": ["string", "null"] },
+        "policy_version": { "type": "string" },
+        "rule_matched": { "type": ["string", "null"] },
+        "evaluation_time_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "TierResult": {
+      "type": "object",
+      "required": ["tier", "evaluated", "result"],
+      "properties": {
+        "tier": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "evaluated": { "type": "boolean" },
+        "result": { "type": "string", "enum": ["RESOLVED", "UNRESOLVED", "SKIPPED"] },
+        "decision": { "oneOf": [{ "$ref": "#/$defs/Decision" }, { "type": "null" }] },
+        "reason_code": { "oneOf": [{ "$ref": "#/$defs/ReasonCode" }, { "type": "null" }] },
+        "reason_detail": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "Finding": {
+      "type": "object",
+      "required": ["finding_type", "severity", "description"],
+      "properties": {
+        "finding_type": {
+          "type": "string",
+          "enum": ["SCOPE_VIOLATION", "AUDIENCE_MISMATCH", "CONFIDENCE_CONCERN", "INFLUENCE_RISK", "POLICY_VIOLATION"]
+        },
+        "severity": { "$ref": "#/$defs/RiskLevel" },
+        "description": { "type": "string" },
+        "location": { "type": ["string", "null"] },
+        "recommendation": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "TrustSnapshot": {
+      "type": "object",
+      "required": ["agent_type", "capability_trust", "snapshot_at"],
+      "properties": {
+        "agent_type": { "type": "string" },
+        "capability_trust": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/TrustTier" }
+        },
+        "snapshot_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "CandidateRule": {
+      "type": "object",
+      "required": ["candidate_id", "source_escalation", "proposed_rule", "proposed_tier", "confidence", "status"],
+      "properties": {
+        "candidate_id": { "type": "string" },
+        "source_escalation": { "type": "string" },
+        "proposed_rule": { "$ref": "#/$defs/ActionPattern" },
+        "proposed_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["PROPOSED", "UNDER_REVIEW", "APPROVED", "REJECTED", "PROMOTED"]
+        },
+        "reviewed_by": { "type": ["string", "null"] },
+        "promoted_at": { "type": ["string", "null"], "format": "date-time" },
+        "policy_version": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "GovernanceErrorType": {
+      "type": "string",
+      "enum": [
+        "GOVERNANCE_UNAVAILABLE",
+        "AUTHORITY_EXPIRED",
+        "IDENTITY_EXPIRED",
+        "IDENTITY_INVALID",
+        "IDENTITY_REVOKED",
+        "REGISTRATION_FAILED",
+        "RATE_LIMITED",
+        "POLICY_EVALUATION_TIMEOUT"
+      ]
+    },
+    "GovernanceError": {
+      "type": "object",
+      "required": ["error_type", "message", "retryable"],
+      "properties": {
+        "error_type": { "$ref": "#/$defs/GovernanceErrorType" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "retry_after_ms": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "AuthorityGrant": {
+      "type": "object",
+      "required": ["grant_id", "agent_type", "scope", "ttl", "granted_by", "granted_at", "policy_version"],
+      "properties": {
+        "grant_id": { "type": "string" },
+        "agent_type": { "type": "string" },
+        "scope": { "$ref": "#/$defs/PolicyScope" },
+        "escalation_policy": { "$ref": "#/$defs/EscalationRule" },
+        "rate_limits": { "type": "array", "items": { "$ref": "#/$defs/RateLimit" } },
+        "damage_budget": { "$ref": "#/$defs/DamageBudget" },
+        "ttl": { "type": "string", "format": "duration", "description": "REQUIRED. No permanent grants." },
+        "granted_by": { "type": "string", "description": "Human identity. Always a person." },
+        "granted_at": { "type": "string", "format": "date-time" },
+        "policy_version": { "type": "string" },
+        "terminated": { "type": "boolean", "default": false },
+        "terminated_at": { "type": ["string", "null"], "format": "date-time" },
+        "terminated_by": {
+          "type": ["string", "null"],
+          "description": "Human identity for REVOKED terminations. Null for system-driven (EXPIRED, CASCADED)."
+        },
+        "termination_reason": {
+          "oneOf": [
+            { "$ref": "#/$defs/GrantTerminationReason" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentIdentity": {
+      "type": "object",
+      "required": ["instance_id", "agent_type", "parent_id", "lineage_chain", "authority_scope", "trust_tier", "created_at", "expires_at", "signature"],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "agent_type": { "type": "string" },
+        "parent_id": { "type": ["string", "null"] },
+        "lineage_chain": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "authority_scope": { "$ref": "#/$defs/PolicyScope" },
+        "task_context": { "$ref": "#/$defs/TaskContext" },
+        "trust_tier": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/TrustTier" }
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "signature": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

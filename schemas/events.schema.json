@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-governance-spec.dev/schemas/events.schema.json",
+  "title": "Agent Governance Specification — Event Schema",
+  "description": "Machine-readable schemas for all events defined in Section 4. Normative for interoperability.",
+  "$defs": {
+    "EventBase": {
+      "type": "object",
+      "required": ["event_id", "schema_version", "timestamp"],
+      "properties": {
+        "event_id": { "type": "string" },
+        "schema_version": { "type": "string", "const": "0.1.0" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ActionRequested": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "action_type", "action_params", "resource"],
+          "properties": {
+            "event_type": { "const": "ActionRequested" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "action_params": { "type": "object" },
+            "resource": { "$ref": "types.schema.json#/$defs/ResourceDescriptor" },
+            "causal_parent": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "ActionEvaluated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "action_type", "decision", "tier", "reason_code", "policy_version", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "ActionEvaluated" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "decision": { "$ref": "types.schema.json#/$defs/Decision" },
+            "tier": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "reason_code": { "$ref": "types.schema.json#/$defs/ReasonCode" },
+            "reason_detail": { "type": ["string", "null"] },
+            "policy_version": { "type": "string" },
+            "attenuation": {
+              "oneOf": [{ "$ref": "types.schema.json#/$defs/Attenuation" }, { "type": "null" }]
+            },
+            "causal_parent": { "type": "string" }
+          },
+          "if": {
+            "properties": { "decision": { "const": "ATTENUATE" } },
+            "required": ["decision"]
+          },
+          "then": {
+            "required": ["attenuation"],
+            "properties": {
+              "attenuation": { "$ref": "types.schema.json#/$defs/Attenuation" }
+            }
+          }
+        }
+      ]
+    },
+    "ActionExecuted": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "action_type", "action_params", "outcome", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "ActionExecuted" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "action_params": { "type": "object" },
+            "outcome": { "$ref": "types.schema.json#/$defs/ActionOutcome" },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "ActionDenied": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "action_type", "reason_code", "policy_version", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "ActionDenied" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "reason_code": { "$ref": "types.schema.json#/$defs/ReasonCode" },
+            "reason_detail": { "type": ["string", "null"] },
+            "policy_version": { "type": "string" },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "ActionEscalated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "action_type", "reason", "tier_results", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "ActionEscalated" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "reason": { "type": "string" },
+            "tier_results": {
+              "type": "array",
+              "items": { "$ref": "types.schema.json#/$defs/TierResult" }
+            },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "EscalationResolved": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "action_type", "decision", "justification", "decider_identity", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "EscalationResolved" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "decision": { "$ref": "types.schema.json#/$defs/EscalationDecision" },
+            "justification": { "type": "string", "minLength": 1 },
+            "decider_identity": { "type": "string" },
+            "candidate_rule": {
+              "oneOf": [{ "$ref": "types.schema.json#/$defs/CandidateRule" }, { "type": "null" }]
+            },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "EscalationTimedOut": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["escalation_id", "agent_identity", "action_type", "timeout_duration", "applied_decision", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "EscalationTimedOut" },
+            "escalation_id": { "type": "string" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "action_type": { "type": "string" },
+            "timeout_duration": { "type": "string", "format": "duration" },
+            "applied_decision": { "$ref": "types.schema.json#/$defs/Decision" },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "AgentSpawned": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["parent_identity", "child_identity", "delegated_scope", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "AgentSpawned" },
+            "parent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "child_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "delegated_scope": { "$ref": "types.schema.json#/$defs/PolicyScope" },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "AgentTerminated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "reason"],
+          "properties": {
+            "event_type": { "const": "AgentTerminated" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "reason": { "$ref": "types.schema.json#/$defs/TerminationReason" },
+            "causal_parent": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "TrustAdjusted": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_type", "capability_class", "previous_tier", "new_tier", "basis"],
+          "properties": {
+            "event_type": { "const": "TrustAdjusted" },
+            "agent_type": { "type": "string" },
+            "capability_class": { "$ref": "types.schema.json#/$defs/CapabilityClass" },
+            "previous_tier": { "$ref": "types.schema.json#/$defs/TrustTier" },
+            "new_tier": { "$ref": "types.schema.json#/$defs/TrustTier" },
+            "basis": { "type": "string" },
+            "causal_parent": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "PolicyUpdated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_type", "previous_version", "new_version", "updated_by", "change_summary"],
+          "properties": {
+            "event_type": { "const": "PolicyUpdated" },
+            "agent_type": { "type": "string" },
+            "previous_version": { "type": "string" },
+            "new_version": { "type": "string" },
+            "updated_by": { "type": "string" },
+            "change_summary": { "type": "string" },
+            "causal_parent": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "OutputEvaluated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["agent_identity", "output_type", "audience", "decision", "scope_alignment", "causal_parent"],
+          "properties": {
+            "event_type": { "const": "OutputEvaluated" },
+            "agent_identity": { "$ref": "types.schema.json#/$defs/AgentIdentity" },
+            "output_type": { "$ref": "types.schema.json#/$defs/OutputType" },
+            "audience": { "$ref": "types.schema.json#/$defs/Audience" },
+            "decision": { "$ref": "types.schema.json#/$defs/OutputDecision" },
+            "scope_alignment": { "type": "number", "minimum": 0, "maximum": 1 },
+            "findings": {
+              "type": "array",
+              "items": { "$ref": "types.schema.json#/$defs/Finding" }
+            },
+            "causal_parent": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "AuthorityGrantCreated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["grant", "created_by"],
+          "properties": {
+            "event_type": { "const": "AuthorityGrantCreated" },
+            "grant": { "$ref": "types.schema.json#/$defs/AuthorityGrant" },
+            "created_by": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "AuthorityGrantTerminated": {
+      "allOf": [
+        { "$ref": "#/$defs/EventBase" },
+        {
+          "type": "object",
+          "required": ["grant_id", "agent_type", "reason", "cascade_count"],
+          "properties": {
+            "event_type": { "const": "AuthorityGrantTerminated" },
+            "grant_id": { "type": "string" },
+            "agent_type": { "type": "string" },
+            "reason": { "$ref": "types.schema.json#/$defs/GrantTerminationReason" },
+            "reason_detail": { "type": ["string", "null"] },
+            "terminated_by": {
+              "type": ["string", "null"],
+              "description": "Human identity responsible for termination. Null for system-driven terminations (EXPIRED, CASCADED)."
+            },
+            "cascade_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of active identities affected by this termination."
+            }
+          }
+        }
+      ]
+    }
+  }
+}
