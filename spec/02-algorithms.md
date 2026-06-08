@@ -1,6 +1,6 @@
 # Appendix D: Canonical Algorithms
 
-This appendix defines the reference algorithms for action pattern matching, policy rule evaluation, and scope subset comparison. These algorithms are **normative** — conforming implementations MUST produce identical results for identical inputs.
+This appendix defines the reference algorithms for action pattern matching, policy rule evaluation, and scope subset comparison. These algorithms are **normative**, and conforming implementations MUST produce identical results for identical inputs.
 
 A reference implementation in Python is provided at `simulation/reference_algorithms.py`.
 
@@ -76,8 +76,8 @@ on constraint failure, not ATTENUATE. To explicitly request attenuation,
 authors omit `on_constraint_fail` (or set it to null).
 
 Attenuation is defined only for ALLOW rules. Setting
-`on_constraint_fail: ATTENUATE` is forbidden — attenuation is determined by
-the algorithm, not by author override.
+`on_constraint_fail: ATTENUATE` is forbidden, because attenuation is determined by
+the algorithm and not by author override.
 
 The full decision matrix for ALLOW rules with non-empty constraints whose
 constraints fail:
@@ -99,14 +99,14 @@ false because attenuation is defined only for ALLOW rules; only the
 
 Implementations MUST reject at policy-load time:
 - Rules with `on_constraint_fail` set when `constraints` is empty (the field
-  would be unreachable — silent no-op).
+  would be unreachable, a silent no-op).
 - Rules with `on_constraint_fail == ATTENUATE`.
 
 Implementations MUST detect run-time re-evaluation cycles in the
 escalation → modify → re-evaluate path (per Section 3.8 and C.7
 `requires_reevaluation`) and break them with DENY after a configurable
 maximum re-entry count (RECOMMENDED: 3). Static rejection of cycle-prone
-policies is RECOMMENDED but not REQUIRED — the static analysis is generally
+policies is RECOMMENDED but not REQUIRED, since the static analysis is generally
 undecidable.
 
 ### Attenuation Eligibility
@@ -138,7 +138,7 @@ function can_attenuate(constraints: ParameterConstraint[], params: object) -> bo
 ```
 
 Strict inequalities (LESS_THAN, GREATER_THAN) are excluded because their
-attenuated values are not well-defined over the reals — there is no maximum
+attenuated values are not well-defined over the reals, since there is no maximum
 value strictly less than X for general numeric types.
 
 `is_finite_number(x)` is true if and only if `x` is a JSON number per RFC
@@ -200,9 +200,9 @@ function evaluate_constraint(constraint: ParameterConstraint, params: object) ->
 ### Variable Resolution
 
 Fields may contain variable references:
-- `${agent.task_context.user_id}` — resolved from the agent's task context
-- `${agent.instance_id}` — the evaluating agent's instance ID
-- `${env.current_time}` — current timestamp
+- `${agent.task_context.user_id}` resolves from the agent's task context
+- `${agent.instance_id}` is the evaluating agent's instance ID
+- `${env.current_time}` is the current timestamp
 
 Variable resolution occurs at evaluation time. Unresolvable variables cause the constraint to evaluate to `false` (fail-closed).
 
@@ -270,7 +270,7 @@ Restrictiveness comparison by operator:
 | LESS_THAN_OR_EQUAL(X) | Child has LESS_THAN_OR_EQUAL(Y) where Y <= X |
 | IN(list) | Child has IN(sublist) where sublist is a subset of list |
 | NOT_IN(list) | Child has NOT_IN(superlist) where superlist is a superset of list |
-| EQUALS(X) | Child has EQUALS(X) — same value only |
+| EQUALS(X) | Child has EQUALS(X), same value only |
 
 ### Step 3: Delegation Narrowing
 
@@ -349,7 +349,7 @@ function check_rate_limit_fixed(agent_id, action_type, rate_limit, action_log) -
 
 ### Hash Input: Canonical Entry Serialization
 
-The chain hash covers a **canonical serialization of the full immutable entry**, not a subset of fields. This ensures that any change to any field — decision, reason, outcome, policy_version, trust_state, causal_parent — is detectable.
+The chain hash covers a **canonical serialization of the full immutable entry**, not a subset of fields. This ensures that any change to any field, whether decision, reason, outcome, policy_version, trust_state, or causal_parent, is detectable.
 
 The canonical form is **RFC 8785 (JSON Canonicalization Scheme, JCS)** applied to the entry object with `chain_hash` omitted. JCS defines a deterministic JSON serialization: object keys sorted lexicographically (recursively for nested objects), no whitespace between tokens, UTF-8 without byte-order mark, standard JSON string escaping, and canonical number formatting.
 
@@ -471,7 +471,7 @@ The tier label is consumed by Policy Gate Tier 3 (see D.7).
 
 ---
 
-## D.7 Policy Gate Tier 3 — Behavioral Pattern Analysis
+## D.7 Policy Gate Tier 3: Behavioral Pattern Analysis
 
 Tier 3 is an Extension Profile component. Conforming implementations of the Extension Profile MUST run Tier 3 only after Tier 1 (deterministic rule check) and Tier 2 (parameter inspection) have not produced a terminal decision, and MUST produce decisions that are deterministic functions of the declared inputs.
 
@@ -536,7 +536,7 @@ A Tier 3 that uses machine-learned classifiers, probabilistic scoring, or opaque
 
 ---
 
-## D.8 Output Evaluator — Scope Alignment
+## D.8 Output Evaluator: Scope Alignment
 
 The Output Evaluator is an Extension Profile component. Two alignment methods are defined. Conforming implementations of the Extension Profile MUST support at least one and MAY support both.
 

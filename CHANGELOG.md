@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0-draft (2026-06-08)
+
+Refactor of the identity layer toward consuming external agent-identity standards rather than defining everything in-house.
+
+### Changed (spec)
+- **Agent Identity Service (3.2) recast as an interface contract.** The specification states what an agent identity must assert and what the governance layer must verify, without mandating a format. A reference binding points to external identity standards (AIP, the MIT Authenticated Delegation model) that an implementation may consume in place of a bespoke identity service.
+- **Policy Gate (3.3).** Clarified that the identity and delegation assertions consumed at Tier 1 are an interface input, while the four-outcome decision (ALLOW, DENY, ESCALATE, ATTENUATE) and the attenuation logic remain defined by this specification.
+
+### Added (spec)
+- **2.3 Reconciling External Inputs (new section).** Rules that preserve the specification's guarantees when an external identity input is consumed: human origin scoped to the operator's organization, with institutional accountability at cross-organization boundaries; audit recorded independently in the Audit Ledger rather than relying on in-token provenance; and external stateful or temporal risk signals (ACP-style) admitted as Tier 3 evidence without displacing the four-outcome decision.
+- **9.1 Security and Identity Standards.** Added AIP, Authenticated Delegation, and ACP as named relationships, each pointing to the 2.3 reconciliation rules.
+
 ## 0.5.0-draft (2026-05-01)
 
 Closes the policy-evaluation ambiguities identified by clean-room implementation

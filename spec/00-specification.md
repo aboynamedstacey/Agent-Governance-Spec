@@ -1,32 +1,32 @@
 # Agent Governance Specification
 
-**Version:** 0.5.0-draft
+**Version:** 0.6.0-draft
 **Status:** Draft Interoperability Specification
 **Author:** aboynamedstacey
-**Date:** 2026-05-07
+**Date:** 2026-06-08
 **License:** Apache 2.0
 
 ---
 
 ## Abstract
 
-This document is a draft interoperability specification for governing autonomous AI agent systems in enterprise environments. It establishes contracts, event schemas, and system guarantees that engineering teams implement independently while working toward interoperability.
+This document is a draft interoperability specification for the governance of autonomous AI agents in enterprise environments. It sets out the contracts, event schemas, and system guarantees through which governance components built by separate teams can work as one.
 
-The specification addresses a structural gap in the current agent ecosystem: frameworks for making agents capable are mature; frameworks for making agents governable are not. Existing approaches bifurcate between output safety products (governing what agents say) and action control products (governing what agents do). Neither addresses the full governance surface, and neither provides the delegation chain accountability, trust management, or legally defensible decision traces that enterprise deployment requires.
+Agent frameworks have matured quickly, and companies are already running them against production data and live systems. The machinery for governing those agents has lagged well behind. A firm that deploys them today cannot easily give an auditor a clean account of who authorized each action, what the bounds of that authority were, and how authority passed from one agent to the next as work was delegated. The market has so far answered in fragments, one class of product policing what an agent says and another constraining what it does, with little that addresses the wider problem of accountable delegation that regulated deployment requires.
 
-This specification treats AI agents as **untrusted processes operating under delegated human authority**. Every design decision flows from that framing. The agents may be capable, helpful, and running code you wrote yourself. They are still untrusted processes, and the architecture governs them accordingly.
+The specification rests on a single premise, that an AI agent is **an untrusted process acting under delegated human authority**. That idea shapes every decision that follows. An agent may be capable, well-behaved, and built from code the operator wrote, and it remains, for the purposes of governance, an untrusted process to be bounded accordingly.
 
 ### Design Principles
 
-1. **Containment, not collaboration.** The governance layer constrains agents. It does not negotiate with them, rely on their self-reporting, or trust their judgment about their own behavior.
+1. **Containment.** The governance layer is built to constrain agents rather than to collaborate with them. It does not negotiate, it does not rely on an agent's account of its own conduct, and it does not defer to an agent's judgment about what it should be permitted to do.
 
-2. **Unified governance surface.** What agents DO (tool calls, API invocations, agent spawning) and what agents SAY (text outputs, recommendations, instructions to other agents) are governed through the same policy framework.
+2. **A single governance surface.** What an agent does, through tool calls, API invocations, and the spawning of further agents, and what an agent says, through its text, recommendations, and instructions to other agents, are governed under one policy framework rather than two disconnected ones.
 
-3. **Authority has human origin.** Every agent action traces back to a human decision through an unbroken chain of delegation. If the chain breaks, the action is unauthorized.
+3. **Authority of human origin.** Every action an agent takes traces back to a human decision along an unbroken chain of delegation, and where that chain is broken, the action carries no authority.
 
-4. **Pluggable implementation.** The specification defines contracts and guarantees. Engineering teams bring their own implementations. Different teams can build policy engines, audit backends, and framework adapters that interoperate through shared event schemas.
+4. **Implementation left to the implementer.** The specification fixes the contracts and the guarantees and leaves the engineering to those who build it. Separate teams can supply their own policy engines, audit backends, and framework adapters, and these interoperate through the shared event schemas.
 
-5. **Governance overhead is proportional to risk.** Low-risk actions resolve in microseconds through deterministic rule evaluation. High-risk actions involve richer evaluation. Human review is reserved for what automated evaluation genuinely cannot resolve.
+5. **Effort proportional to risk.** A low-risk action resolves in microseconds through deterministic rule evaluation, a higher-risk action draws richer scrutiny, and human review is held in reserve for the cases that automated evaluation cannot settle on its own.
 
 ---
 
@@ -47,7 +47,7 @@ Agent
   → Return result to agent
 ```
 
-This is the entire synchronous cost for routine actions. No trust lookups. No historical scans. No human routing. No compliance mapping. No full-context retrieval.
+This is the entire synchronous cost of a routine action. There are no trust lookups, no historical scans, no human routing, no compliance mapping, and no full-context retrieval on this path.
 
 Components with fast-path touchpoints:
 - **Policy Gate (Tiers 1-2):** Cached rule evaluation. No external state required.
@@ -87,7 +87,7 @@ Components with exception-path touchpoints:
 
 None of these functions sit inline on the ordinary action path. They deepen governance without adding request-path weight.
 
-**What Core conformance means in runtime terms:** A conforming Core implementation's fast path is Lane 1 only. Lane 2 components are Extension Profiles — a Core implementation that receives an ESCALATE decision from Tier 1-2 pauses the action and records the escalation, but the human review workflow is Extension-defined. Lane 3 runs entirely off-path. A Core implementation can be fast because most of the architecture lives in Lanes 2 and 3.
+**What Core conformance means in runtime terms:** A conforming Core implementation's fast path is Lane 1 only. The Lane 2 components are Extension Profiles, so a Core implementation that receives an ESCALATE decision from Tier 1-2 pauses the action and records the escalation, while the human review workflow itself is Extension-defined. Lane 3 runs entirely off-path. A Core implementation can be fast because most of the architecture lives in Lanes 2 and 3.
 
 ---
 
@@ -99,57 +99,57 @@ The specification defends against five threat categories, all originating from o
 
 **Threat 1: Scope Drift**
 
-The dominant threat. An agent asked to summarize customer feedback calls a write API because the LLM reasoned it would be helpful. Scope drift is not malice — it is the natural consequence of stochastic systems operating within deterministic enterprise environments. At machine speed, across many systems, scope drift becomes scope explosion.
+This is the dominant threat. An agent asked to summarize customer feedback calls a write API because the model reasoned that doing so would be helpful. Scope drift is rarely a matter of malice. It is the ordinary consequence of stochastic systems operating inside deterministic enterprise environments, and at machine speed, across many systems at once, it compounds into scope explosion.
 
-Scope drift is the threat most organizations underestimate because it does not look like a security incident. It looks like a helpful agent.
+Most organizations underestimate scope drift because it does not present as a security incident. It presents as an agent being helpful, which is precisely what makes it difficult to detect.
 
 **Threat 2: Authority Laundering**
 
-When Agent A spawns Agent B, what can Agent B do? In most current frameworks, the answer is "whatever Agent A can do, or more." This is privilege escalation as a normal part of operation. A research agent spawns a "helper" with access to the same tools, and an unaudited subprocess now holds production API keys.
+When Agent A spawns Agent B, the question is what Agent B is then able to do, and in most current frameworks the answer is "whatever Agent A can do, or more." That makes privilege escalation a routine part of operation: a research agent spawns a "helper" with access to the same tools, and an unaudited subprocess now holds production API keys.
 
-Authority laundering extends to breadth as well as depth. An agent that spawns 100 sub-agents, each delegating further, creates a tree of over a thousand relationships in seconds. The delegation topology is fundamentally different from human organizations and requires explicit architectural controls.
+Authority laundering extends to breadth as well as depth. An agent that spawns a hundred sub-agents, each delegating further, can create a tree of more than a thousand relationships in seconds. That delegation topology differs fundamentally from a human organization, and it calls for explicit architectural controls.
 
 **Threat 3: Prompt Injection and Manipulation**
 
-Agents consume external data: emails, documents, web content, API responses. Any of these can contain instructions that an LLM will follow. This is an established attack vector, but it becomes architectural when agents act on the results — a manipulated agent does not just produce bad text, it calls real APIs with real consequences.
+Agents consume external data, including emails, documents, web content, and API responses, any of which can carry instructions that a model will follow. The attack vector is well established, and it becomes an architectural concern once agents act on what they read, because a manipulated agent does not merely produce bad text; it calls real APIs with real consequences.
 
-Prompt injection has no equivalent in traditional security models. It is a novel threat where the data being processed can rewrite the principal's intent.
+Prompt injection has no close equivalent in traditional security models, since it is a threat in which the data being processed can rewrite the principal's intent.
 
-*See Section 1.3 — Scope of Governance-Layer Defense Against Prompt Injection — for how this specification engages this threat.*
+*See Section 1.3 (Scope of Governance-Layer Defense Against Prompt Injection) for how this specification engages this threat.*
 
 **Threat 4: Audit Opacity**
 
 Under the EU AI Act, SOC2, and similar frameworks, "an AI did it" is not an explanation. Regulators and courts require reconstruction of the chain of reasoning, the data consumed, the decisions made, and the authority under which each action was taken.
 
-Standard application logs record what happened. Governance requires recording **why** each action was permitted — which policy was in effect, what the evaluation was, who authorized the delegation chain, and what the trust state was at the time of the decision. This specification provides a record substrate that supports evidence production for regulatory inquiries, but the evidentiary adequacy of any particular implementation depends on the implementation's fidelity to the specification and the regulatory context.
+Standard application logs record what happened. Governance requires a record of **why** each action was permitted: which policy was in effect, how the action was evaluated, who authorized the delegation chain, and what the trust state was at the moment of the decision. This specification provides a record substrate that supports the production of such evidence for regulatory inquiries, though the evidentiary adequacy of any given implementation will depend on its fidelity to the specification and on the regulatory context.
 
 **Threat 5: Governance System Failure**
 
-The governance layer itself is a high-value target and a potential failure point. If the control plane goes down and agents default to "allow," governance disappears. If agents default to "deny," operations halt. The governance system's own security, availability, and failure modes must be explicitly designed.
+The governance layer is itself a high-value target and a potential point of failure. If the control plane goes down and agents default to "allow," governance disappears; if they default to "deny," operations halt. The governance system's own security, availability, and failure modes must therefore be designed explicitly rather than left to chance.
 
 ### 1.2 Threat Model Boundaries
 
-This specification does not prioritize the "adversarial superintelligent AI" threat. Not because it is impossible, but because it is the wrong design frame for enterprise governance. The overwhelming majority of agent failures in enterprise environments are mundane: scope drift, misconfiguration, inherited permissions, and bad inputs. An architecture that handles these well constrains adversarial behavior as a side effect. An architecture designed primarily around adversarial AI will be over-engineered for the common case and probably still inadequate for the exotic case.
+This specification does not place the "adversarial superintelligent AI" at the center of its threat model. That scenario is not dismissed as impossible; it is simply the wrong design frame for enterprise governance. The great majority of agent failures in enterprise environments are mundane, a matter of scope drift, misconfiguration, inherited permissions, and bad inputs. An architecture that handles those well constrains adversarial behavior as a side effect, whereas an architecture built primarily around adversarial AI tends to be over-engineered for the common case and still inadequate for the exotic one.
 
 The specification also does not replace network security, infrastructure security, or application security. It layers on top of existing security architectures, addressing the governance gap specific to autonomous AI agents.
 
 ### 1.3 Scope of Governance-Layer Defense Against Prompt Injection
 
-Prompt injection is a threat to the model layer. The LLM can be deceived by adversarial content into producing outputs that diverge from the principal's intent. This specification does not defend against that deception. Model-level defenses — instruction hierarchy, content classifiers, constitutional methods, input sanitization — are the responsibility of the model provider and runtime environment.
+Prompt injection is a threat to the model layer, where a model can be deceived by adversarial content into producing outputs that diverge from the principal's intent. This specification does not defend against that deception. Model-level defenses, such as instruction hierarchy, content classifiers, constitutional methods, and input sanitization, are the responsibility of the model provider and the runtime environment.
 
 The governance layer defends against injection's operational consequences. A successfully deceived agent operates under its existing authority, and the spec's invariants bound what that authority permits. The table below maps injection consequences to the mechanisms that contain them.
 
 | Consequence of successful injection | Containment mechanism | Guarantee |
 |---|---|---|
-| Agent attempts to exfiltrate credentials | Execution Boundary holds all credentials; agent context never includes secrets. | G5 — Credential Isolation |
-| Agent attempts action outside granted scope | Policy Gate denies; authority cannot expand through deception. | G3 — Authority Only Attenuates |
-| Agent attempts to grant a child agent broader authority | Delegation invariant rejects any grant exceeding parent authority. | G3 — Authority Only Attenuates |
-| Agent attempts high-frequency or high-damage actions | Rate limits and damage budgets throttle and bound. | G1 — No Bypass (via Policy Gate) |
-| Agent succeeds in a bounded harmful action | Audit chain records cause, decision, outcome, and policy version. | G6 — Decision Traceability; G7 — Tamper Evidence |
-| Agent targets the governance layer itself | Agent isolation prevents access to Policy Gate, Authority Registry, or Audit Ledger. | G4 — Agent Isolation |
-| All governance mechanisms fail | System fails closed; agents stop. | G8 — Fail-Closed |
+| Agent attempts to exfiltrate credentials | Execution Boundary holds all credentials; agent context never includes secrets. | G5: Credential Isolation |
+| Agent attempts action outside granted scope | Policy Gate denies; authority cannot expand through deception. | G3: Authority Only Attenuates |
+| Agent attempts to grant a child agent broader authority | Delegation invariant rejects any grant exceeding parent authority. | G3: Authority Only Attenuates |
+| Agent attempts high-frequency or high-damage actions | Rate limits and damage budgets throttle and bound. | G1: No Bypass (via Policy Gate) |
+| Agent succeeds in a bounded harmful action | Audit chain records cause, decision, outcome, and policy version. | G6: Decision Traceability; G7: Tamper Evidence |
+| Agent targets the governance layer itself | Agent isolation prevents access to Policy Gate, Authority Registry, or Audit Ledger. | G4: Agent Isolation |
+| All governance mechanisms fail | System fails closed; agents stop. | G8: Fail-Closed |
 
-An implementation conforming to the Core Profile contains injection consequences at the governance layer even though the underlying deception occurs at the model layer. Preventing the deception is out of scope. Containing its consequences, attributing them, and recovering within bounded damage is in scope.
+An implementation conforming to the Core Profile contains the consequences of injection at the governance layer, even though the underlying deception occurs at the model layer. Preventing the deception lies outside the scope of this specification; containing its consequences, attributing them, and recovering within bounded damage lies within it.
 
 ---
 
@@ -271,9 +271,21 @@ Agent produces output:
 
 ---
 
+### 2.3 Reconciling External Inputs
+
+Several of the components defined below are contracts rather than fixed implementations, and an operator may satisfy them by consuming work emerging elsewhere in the ecosystem rather than building everything from scratch. The Agent Identity Service (Section 3.2) is the clearest case, since its requirements can be met by an external identity standard such as AIP, the Agent Identity Protocol, or the MIT "Authenticated Delegation" model. Where an operator adopts an external input of this kind, the rules below preserve the specification's guarantees across the seam.
+
+**Human origin, scoped to where it is practical.** Within the operator's own organization, every chain of authority must terminate at a named human. That is Guarantee 2, and consuming an external input does not relax it. When the operator consumes an external identity for an agent that belongs to another organization, naming a specific individual at that counterparty is often not possible. There, the chain must terminate at an accountable organization, and at a named human within it wherever the external standard supplies one. The requirement holds in full where the operator has control, and falls back to institutional accountability at the boundary where individual attribution is not available.
+
+**Audit remains the operator's own record.** An external input may carry its own provenance inside its token, as AIP does through its completion blocks. That record is a useful input, but it is not the system of record. The governance layer must write an independent entry to the Audit Ledger (Section 3.5) for every decision it makes. In-token provenance may be referenced, but it does not by itself satisfy Guarantee 6 (Decision Traceability) or Guarantee 7 (Tamper Evidence).
+
+**External risk signals inform the decision without replacing it.** Some external inputs supply stateful or temporal risk signals, in the manner of an admission-control protocol such as ACP. These may be fed into Tier 3 of the Policy Gate as further evidence. They must not displace the Gate's four-outcome decision (ALLOW, DENY, ESCALATE, ATTENUATE) with a binary admit-or-deny verdict, since attenuation and escalation are central to how this specification governs.
+
+---
+
 ## 3. Component Contracts
 
-Each contract defines the interface that any conforming implementation must satisfy. The specification defines WHAT each component does and what guarantees it must provide. It does not prescribe HOW — engineering teams choose their own implementation technology, storage backends, and deployment models.
+Each contract defines the interface that any conforming implementation must satisfy. The specification defines WHAT each component does and what guarantees it must provide. It does not prescribe HOW, leaving engineering teams to choose their own implementation technology, storage backends, and deployment models.
 
 ### 3.1 Authority Registry
 
@@ -318,7 +330,7 @@ AuthorityGrant {
 - Every grant has a TTL. The implementation MUST reject grants without expiration.
 - Grant revocation propagates to all Policy Gate instances within a defined SLA (implementation-specific, but MUST be documented).
 - Policy history is retained. No version is deleted. Rollback creates a new version that restores the content of a prior version.
-- **Termination completeness.** Every grant termination — whether `REVOKED`, `CASCADED`, or `EXPIRED` — MUST produce exactly one `AuthorityGrantTerminated` event and MUST be reflected in the grant struct (`terminated = true`, `terminated_at` set, `terminated_by` set for REVOKED or null for system-driven, `termination_reason` set to the appropriate value). TTL elapse is a termination, not a computed non-state. Whether implementations detect TTL elapse eagerly (scheduled sweep) or lazily (on-access check that fires the event and updates the struct before any denial) is implementation-defined. The invariant is that by the time any Policy Gate evaluation runs against an expired grant, the `AuthorityGrantTerminated` event has been emitted and the struct reflects termination.
+- **Termination completeness.** Every grant termination, whether `REVOKED`, `CASCADED`, or `EXPIRED`, MUST produce exactly one `AuthorityGrantTerminated` event and MUST be reflected in the grant struct (`terminated = true`, `terminated_at` set, `terminated_by` set for REVOKED or null for system-driven, `termination_reason` set to the appropriate value). TTL elapse is a termination, not a computed non-state. Whether implementations detect TTL elapse eagerly (scheduled sweep) or lazily (on-access check that fires the event and updates the struct before any denial) is implementation-defined. The invariant is that by the time any Policy Gate evaluation runs against an expired grant, the `AuthorityGrantTerminated` event has been emitted and the struct reflects termination.
 
 #### Policy Validation
 
@@ -350,15 +362,19 @@ First-match-wins is mandated because it is deterministic and predictable: the sa
 
 #### Design Notes
 
-Authority is ABAC-based (Attribute-Based Access Control), not RBAC (Role-Based). Agents do not have roles. They have types, tasks, lineage, and context. A policy that says "research-agents can read but not write" is a starting point, but enterprise governance also requires "research-agents can read this specific data for this specific task during this time window." ABAC supports this. RBAC does not without accumulating role explosion.
+Authority is attribute-based (ABAC, Attribute-Based Access Control) rather than role-based (RBAC). Agents do not have roles; they have types, tasks, lineage, and context. A policy that says "research-agents can read but not write" is only a starting point, because enterprise governance also needs to express "research-agents can read this specific data for this specific task during this time window." ABAC captures that directly, whereas RBAC cannot without an accumulating role explosion.
 
-RBAC may exist at the infrastructure level (the Execution Boundary's credentials may be managed through RBAC). But the agent-facing governance layer uses ABAC.
+RBAC may still exist at the infrastructure level, since the Execution Boundary's credentials can be managed through it, but the agent-facing governance layer is ABAC.
 
 ---
 
 ### 3.2 Agent Identity Service
 
-**Responsibility:** Issues cryptographically signed identities to every agent instance. Tracks lineage (who spawned whom). Enforces delegation attenuation (child authority is always a subset of parent authority).
+**Responsibility:** Establishes the identity of every agent instance, the lineage that links it to the human who authorized it, and the rule that a child's authority is always a subset of its parent's.
+
+This component is defined as an **interface contract**. The specification states what an agent identity must assert and what the governance layer must verify, and it does not mandate a particular identity format. A conforming implementation may meet the contract with an identity service of its own or by consuming an external identity standard that satisfies the same requirements.
+
+**Reference binding.** The natural candidates are the agent-identity efforts now gaining traction: AIP, the Agent Identity Protocol, which carries identity, attenuated authority, and provenance in a single signed token; and the MIT "Authenticated Delegation" work, which extends OAuth and verifiable credentials for the same purpose. Where an operator adopts one of these as its identity input, the reconciliation rules in Section 2.3 apply.
 
 #### Data Model
 
@@ -413,7 +429,7 @@ If any check fails, the spawn request is denied and an `ActionDenied` event is e
 
 #### Ephemeral Agents
 
-Short-lived agents spawned for a single task inherit a constrained subset of their parent's trust. They never build independent trust history. Their trust floor is determined by the parent's delegated trust tier for the relevant capability class. This prevents ephemeral agents from being used to bypass trust requirements — you cannot spawn a disposable agent to do something your trust tier would not permit.
+Short-lived agents spawned for a single task inherit a constrained subset of their parent's trust. They never build independent trust history. Their trust floor is determined by the parent's delegated trust tier for the relevant capability class. This prevents ephemeral agents from being used to bypass trust requirements, because a disposable agent cannot be spawned to do something the parent's trust tier would not itself permit.
 
 #### Identity Renewal
 
@@ -423,7 +439,7 @@ Long-running agents may need to continue past their initial TTL. The Identity Se
 |---|---|
 | `renew_identity` | Extend an active identity's expiration. Subject to: (a) the underlying authority grant must still be active and unexpired, (b) the renewal is recorded in the Audit Ledger, (c) trust state is re-evaluated at renewal time. |
 
-Renewal does not create a new identity — the instance_id, lineage_chain, and authority_scope remain unchanged. Only `expires_at` is extended. The maximum extension is bounded by the authority grant's own TTL — an identity cannot outlive its grant.
+Renewal does not create a new identity; the instance_id, lineage_chain, and authority_scope remain unchanged, and only `expires_at` is extended. The maximum extension is bounded by the authority grant's own TTL, since an identity cannot outlive its grant.
 
 #### Authority Expiration During Active Tasks
 
@@ -439,12 +455,12 @@ When an agent's authority grant expires (TTL elapses) while the agent is active:
 When a parent agent is terminated (for any reason: completed, expired, revoked, error, or killed):
 
 1. All child agents in the parent's delegation tree are terminated with `TerminationReason.CASCADED`.
-2. Cascade is recursive — children of children are also terminated.
+2. Cascade is recursive, so children of children are also terminated.
 3. In-flight actions of cascaded children complete but no new actions are permitted.
 4. The Identity Service emits `AgentTerminated` events for each cascaded child.
 5. The causal_parent for each cascaded termination links to the parent's termination event.
 
-**Rationale:** Authority derives from the parent chain. If a link breaks, everything downstream is unauthorized. This is consistent with Guarantee 2 (No Authority Without Human Origin) — if the chain from human to agent is broken, the agent has no authority.
+**Rationale:** Authority derives from the parent chain, so if a link breaks, everything downstream is unauthorized. This is consistent with Guarantee 2 (No Authority Without Human Origin): if the chain from human to agent is broken, the agent has no authority.
 
 Implementations MAY define a brief grace period (implementation-defined, MUST be documented) for in-flight actions of cascaded children. The grace period allows currently-executing actions to complete but does not permit new actions.
 
@@ -452,7 +468,9 @@ Implementations MAY define a brief grace period (implementation-defined, MUST be
 
 ### 3.3 Policy Gate
 
-**Responsibility:** The enforcement point. Every agent action — every tool call, every API invocation, every agent spawn, every output to an external channel — passes through the Policy Gate. It makes one of four decisions: Allow, Deny, Escalate, or Attenuate.
+**Responsibility:** The enforcement point. Every agent action, whether a tool call, an API invocation, an agent spawn, or an output to an external channel, passes through the Policy Gate, which resolves it into one of four decisions: Allow, Deny, Escalate, or Attenuate.
+
+The identity and delegation assertions the Gate relies on at Tier 1 are an interface input, and may be supplied by an external identity standard under the terms of Section 2.3. The four-outcome decision and the attenuation logic, by contrast, are defined by this specification and are not delegated to an external input.
 
 #### Decision Types
 
@@ -489,7 +507,7 @@ PolicyEvaluationResponse {
 }
 ```
 
-**DENY responses and Agent Isolation:** DENY responses include a `reason_code` and optional `reason_detail` to allow agent frameworks to handle denials programmatically (e.g., retry with different parameters, request identity renewal, shut down gracefully). However, DENY responses MUST NOT reveal policy internals — specific rule names, threshold values, or policy structure. The `reason_code` enum provides sufficient information for programmatic handling without exposing the policy's internal logic to the agent.
+**DENY responses and Agent Isolation:** DENY responses include a `reason_code` and optional `reason_detail` to allow agent frameworks to handle denials programmatically (e.g., retry with different parameters, request identity renewal, shut down gracefully). However, DENY responses MUST NOT reveal policy internals such as specific rule names, threshold values, or policy structure. The `reason_code` enum provides sufficient information for programmatic handling without exposing the policy's internal logic to the agent.
 
 #### Tiered Evaluation
 
@@ -536,7 +554,7 @@ Resolution at Tier 3 is low milliseconds.
 
 **Escalation (when all tiers fail to resolve)**
 
-If no tier can make a definitive Allow, Deny, or Attenuate decision, the action is escalated to the Escalation Router. The escalation includes the reason each tier could not resolve — this context is essential for meaningful human review.
+If no tier can make a definitive Allow, Deny, or Attenuate decision, the action is escalated to the Escalation Router. The escalation includes the reason each tier could not resolve, which is essential context for meaningful human review.
 
 #### Permission Introspection
 
@@ -552,7 +570,7 @@ This allows agents (or their frameworks) to query "can I do X?" without actually
 
 - **Independently rate-limited.** Implementations MUST enforce a separate rate limit on introspection requests per agent instance. Excessive probing is itself a signal.
 - **Logged to a separate introspection log.** This log is available to the Trust Engine.
-- **Analyzed for anomalous patterns.** The Trust Engine SHOULD analyze introspection patterns for systematic boundary probing — e.g., a burst of introspect calls that systematically vary a single parameter to discover where a constraint threshold changes. Anomalous introspection patterns SHOULD reduce the agent's trust tier for the relevant capability class.
+- **Analyzed for anomalous patterns.** The Trust Engine SHOULD analyze introspection patterns for systematic boundary probing, for example a burst of introspect calls that systematically vary a single parameter to discover where a constraint threshold changes. Anomalous introspection patterns SHOULD reduce the agent's trust tier for the relevant capability class.
 
 Introspection responses are subject to the same Agent Isolation constraints as DENY responses: they MUST NOT reveal policy internals beyond the `reason_code`.
 
@@ -590,19 +608,19 @@ Agent → Policy Gate (decision) → Execution Boundary (proxies action) → Too
 #### Guarantees
 
 - **Credential isolation.** Agents reference resources by name. The Execution Boundary resolves names to credentials at execution time. Agent context never contains API keys, connection strings, passwords, or tokens. A compromised agent (through prompt injection or any other vector) cannot leak credentials because it never had them.
-- **Attenuation enforcement.** When the Policy Gate returns ATTENUATE, the Execution Boundary enforces the modification. If the policy says "read-only," the Execution Boundary ensures the connection is actually read-only — not that the agent promised to only read.
+- **Attenuation enforcement.** When the Policy Gate returns ATTENUATE, the Execution Boundary enforces the modification. If the policy says "read-only," the Execution Boundary ensures the connection is actually read-only, rather than relying on the agent's promise to only read.
 - **Result capture.** Every execution result is captured and forwarded to the Audit Ledger, including errors and timeouts.
 - **No direct agent access.** If an agent can reach a tool or API without passing through the Execution Boundary, the specification's guarantees are void. The Execution Boundary is a mandatory chokepoint, not an optional proxy.
 
 #### Design Notes
 
-The Execution Boundary is architecturally distinct from the Policy Gate. The Policy Gate makes decisions. The Execution Boundary enforces them. Separation of decision and enforcement is fundamental to security architecture. Combining them creates a component that is both a high-throughput decision engine and a credential-holding proxy — two responsibilities with conflicting security requirements.
+The Execution Boundary is architecturally distinct from the Policy Gate: the Gate makes decisions, and the Boundary enforces them. This separation of decision from enforcement is a long-standing principle of security architecture. Combining the two would create a single component that is at once a high-throughput decision engine and a credential-holding proxy, two roles whose security requirements pull against each other.
 
 ---
 
 ### 3.5 Audit Ledger
 
-**Responsibility:** Append-only, immutable, causally chained record of every action, decision, and output in the system. The Audit Ledger is not a log. It is a causal chain that can reconstruct the complete history of any agent's operation, including why each action was permitted.
+**Responsibility:** Append-only, immutable, causally chained record of every action, decision, and output in the system. The Audit Ledger is more than a log; it is a causal chain that can reconstruct the complete history of any agent's operation, including why each action was permitted.
 
 #### Audit Entry
 
@@ -626,7 +644,7 @@ AuditEntry {
 
 #### Causal Chaining
 
-Each entry links to the entry that caused it via `causal_parent`. Agent B's action links back to Agent A's spawn action, which links back to the human's task initiation. Walking the causal chain backward from any action reconstructs why that action happened — which human authorized the chain of delegation, through which agents, under which policies.
+Each entry links to the entry that caused it via `causal_parent`. Agent B's action links back to Agent A's spawn action, which links back to the human's task initiation. Walking the causal chain backward from any action reconstructs why that action happened: which human authorized the chain of delegation, through which agents, and under which policies.
 
 This is distinct from chronological logging. Two actions may occur at the same time with no causal relationship. Two actions may be separated by hours but be causally linked. The causal chain captures the actual decision path, not the timeline.
 
@@ -638,7 +656,7 @@ Storing the full agent context (which may include the LLM's entire conversation 
 
 | Operation | Description |
 |---|---|
-| `append` | Write a new entry. Append-only — no update, no delete. |
+| `append` | Write a new entry. Append-only, with no update and no delete. |
 | `get_entry` | Retrieve an entry by ID. |
 | `get_causal_chain` | Walk the causal chain backward from an entry to its root. |
 | `query` | Search entries by agent identity, time range, event type, decision, or policy version. |
@@ -651,7 +669,7 @@ Storing the full agent context (which may include the LLM's entire conversation 
 - **Tamper-evident.** Each entry includes a cryptographic hash incorporating the previous entry's hash, using an algorithm from the approved set (see Appendix C.15). The hash algorithm is declared at chain initialization in the genesis entry and MUST NOT change within a chain. Gaps or modifications in the chain are detectable through integrity verification.
 - **Agent-inaccessible.** No agent identity can read from or write to the Audit Ledger. The ledger is populated by the governance infrastructure (Policy Gate, Execution Boundary, Output Evaluator), never by agents.
 - **Causal completeness.** Every action-driven event has an audit entry with a `causal_parent` linking to the event that caused it. System-driven events (authority expiration, trust adjustment, policy update) MAY have null `causal_parent` when there is no single triggering event. System-driven events with null `causal_parent` MUST include a `reason_code` explaining the trigger.
-- **External anchoring.** Implementations SHOULD support publishing chain head hashes to an independent external timestamping service at configurable intervals (see Appendix C.15). External anchoring enables detection of wholesale chain replacement — an attack that a self-contained hash chain cannot detect.
+- **External anchoring.** Implementations SHOULD support publishing chain head hashes to an independent external timestamping service at configurable intervals (see Appendix C.15). External anchoring enables detection of wholesale chain replacement, an attack that a self-contained hash chain cannot detect.
 - **Queryable.** The ledger supports structured queries by authorized external systems (compliance tools, investigation dashboards, regulatory reporting). Query access is governed by its own access control, independent of agent governance.
 
 #### Tiered Storage
@@ -668,9 +686,9 @@ The specification does not mandate specific retention periods. These are determi
 
 ### 3.6 Output Evaluator *(Extension: Output Governance)*
 
-**Responsibility:** Assesses agent outputs — not tool calls, but the text, recommendations, data, and instructions that agents produce and that influence humans or other agents.
+**Responsibility:** Assesses agent outputs, meaning the text, recommendations, data, and instructions that agents produce and that influence humans or other agents, as distinct from their tool calls.
 
-Controlling what agents do (tool calls) is necessary but insufficient. An agent that calls no tools but generates a persuasive, incorrect recommendation to a human decision-maker has done real damage without triggering action-based governance. An agent that produces instructions consumed by another agent is effectively programming that agent, with no tool call in sight.
+Controlling what agents do through tool calls is necessary but not sufficient. An agent that calls no tools, yet generates a persuasive and incorrect recommendation to a human decision-maker, has done real damage without triggering action-based governance. An agent that produces instructions consumed by another agent is effectively programming that agent, without making a tool call at all.
 
 #### Evaluation Model
 
@@ -706,7 +724,7 @@ OutputEvaluationResponse {
 
 **REVISE decision:** When an output is partially in-scope but contains specific violations, the Output Evaluator returns REVISE instead of SUPPRESS. REVISE returns the output to the agent framework with structured `findings` that identify what is out of scope. The agent framework uses these findings to prompt the agent to produce a corrected output. The revised output is re-evaluated. REVISE preserves the compliant portions of the output rather than discarding everything.
 
-**Design note:** The Output Evaluator does not modify outputs directly. SUPPRESS blocks entirely. REVISE provides structured feedback. The agent framework (not the governance layer) handles the revision interaction. This maintains the principle that the governance layer constrains agents without collaborating with them — it says "this is wrong and here is why," not "let me fix it for you."
+**Design note:** The Output Evaluator does not modify outputs directly. SUPPRESS blocks an output entirely, while REVISE provides structured feedback, and the agent framework, rather than the governance layer, handles the revision interaction. This maintains the principle that the governance layer constrains agents without collaborating with them: it says "this is wrong and here is why," and it does not say "let me fix it for you."
 
 #### Synchronous vs. Asynchronous Evaluation
 
@@ -731,7 +749,7 @@ The policy for which outputs require synchronous vs. asynchronous evaluation is 
 
 ### 3.7 Trust Engine *(Extension: Trust-Adjusted Evaluation)*
 
-**Responsibility:** Measures and manages dynamic, capability-scoped trust for agent types. Trust determines the **scrutiny level** applied to actions within an agent's existing authority — it controls how much evaluation is required, not what is permitted.
+**Responsibility:** Measures and manages dynamic, capability-scoped trust for agent types. Trust determines the **scrutiny level** applied to actions within an agent's existing authority, controlling how much evaluation is required rather than what is permitted.
 
 **Critical distinction: Trust never creates authority.** An agent with HIGH trust in `data_read` cannot read data that its authority scope does not include. Trust only affects whether an allowed action resolves quickly at Tier 1 or requires deeper evaluation at Tier 2-3. Authority (defined by the Authority Registry) determines what an agent MAY do. Trust (measured by the Trust Engine) determines how much scrutiny is applied to actions within that authority. These are separate mechanisms and MUST NOT be conflated in implementation.
 
@@ -808,7 +826,7 @@ This prevents the marketplace fraud pattern: building a perfect track record on 
 
 ### 3.8 Escalation Router *(Extension: Adaptive Escalation)*
 
-**Responsibility:** Routes actions that automated evaluation cannot resolve to human decision-makers. Designs the human interaction to produce genuine engagement, not rubber-stamping. Manages the feedback loop from human decisions to automated rule candidates.
+**Responsibility:** Routes actions that automated evaluation cannot resolve to human decision-makers. It shapes the human interaction so that review is substantive rather than a rubber stamp, and it manages the feedback loop from human decisions to automated rule candidates.
 
 #### Escalation Package
 
@@ -838,7 +856,7 @@ When the `timeout` elapses without a human resolution:
 1. The `on_timeout` decision applies (default: DENY).
 2. An `EscalationTimedOut` event is emitted and recorded in the Audit Ledger.
 3. The agent framework receives the timeout decision as a normal PolicyEvaluationResponse.
-4. Timed-out escalations are flagged for review — they indicate either staffing gaps or timeout values that are too short.
+4. Timed-out escalations are flagged for review, since they indicate either staffing gaps or timeout values that are too short.
 
 #### Resolution
 
@@ -854,20 +872,20 @@ EscalationResolution {
 }
 ```
 
-**MODIFY decision:** When a human reviewer selects MODIFY, they provide a `ModifiedAction` that specifies the approved version of the action. By default, the modified action is re-evaluated by the Policy Gate before execution (`requires_reevaluation: true`). This ensures the human's modification still conforms to policy — a human reviewer cannot use MODIFY to bypass policy constraints.
+**MODIFY decision:** When a human reviewer selects MODIFY, they provide a `ModifiedAction` that specifies the approved version of the action. By default, the modified action is re-evaluated by the Policy Gate before execution (`requires_reevaluation: true`). This ensures the human's modification still conforms to policy, so that a reviewer cannot use MODIFY to bypass policy constraints.
 
 #### Forced Engagement Design
 
-The Escalation Router is designed to defeat automation bias — the documented tendency of human reviewers to approve whatever the system recommends.
+The Escalation Router is designed to defeat automation bias, the documented tendency of human reviewers to approve whatever the system recommends.
 
 - **Justification is mandatory.** The reviewer cannot approve or deny without providing a reason. "Looks fine" is not a justification. The implementation SHOULD validate that the justification references specific aspects of the action or context.
 - **Asymmetric defaults.** For high-risk action classes, the default is DENY. The reviewer must actively override the denial and justify why the action should proceed.
-- **Tier failure context.** The reviewer sees WHY each automated tier could not resolve. This frames the review as "here is the specific ambiguity the system needs you to resolve," not "please approve this."
-- **Sampling and audit.** Not every escalation needs unique deep review. The implementation MAY support statistical sampling — some escalations are flagged for deep review while others receive standard review. All deep-review decisions are themselves audited.
+- **Tier failure context.** The reviewer sees WHY each automated tier could not resolve. This frames the review around the specific ambiguity the system needs resolved, rather than as a request to approve.
+- **Sampling and audit.** Not every escalation needs unique deep review. The implementation MAY support statistical sampling, flagging some escalations for deep review while others receive standard review. All deep-review decisions are themselves audited.
 
 #### Feedback Loop
 
-Every human escalation resolution generates a `candidate_rule` — a proposed policy rule that, if promoted, would allow automated resolution of similar future cases. This is how the system learns: human judgment is encoded into policy over time.
+Every human escalation resolution generates a `candidate_rule`, a proposed policy rule that, if promoted, would allow automated resolution of similar future cases. This is how the system learns, as human judgment is encoded into policy over time.
 
 Candidate rules do not auto-promote. They enter a governed pipeline:
 
@@ -877,7 +895,7 @@ Candidate rules do not auto-promote. They enter a governed pipeline:
 4. Promoted rule is versioned and deployed through the normal policy update process.
 5. Rule promotion is recorded in the Audit Ledger.
 
-If escalation rates exceed a configured threshold (implementation-defined), this is a signal that policies are underspecified and need revision — not that more humans should be reviewing more actions.
+If escalation rates exceed a configured threshold (implementation-defined), this is a signal that policies are underspecified and need revision, rather than a sign that more humans should review more actions.
 
 #### Guarantees
 
@@ -1052,7 +1070,7 @@ EscalationTimedOut {
 }
 ```
 
-**Note:** All event types include a `schema_version` field. Events in Sections 4.1 that do not show `schema_version` above inherit it — all events MUST include this field. The field is shown explicitly only on newly added events to avoid restating the full schema for existing events.
+**Note:** All event types include a `schema_version` field. Events in Sections 4.1 that do not show `schema_version` above inherit it, and all events MUST include this field. The field is shown explicitly only on newly added events to avoid restating the full schema for existing events.
 
 ### 4.2 Event Guarantees
 
@@ -1091,7 +1109,7 @@ The governance layer's internal state is not exposed to agents beyond what the G
 - Agents cannot modify their own identity records.
 - DENY responses include a `reason_code` but MUST NOT reveal policy internals (threshold values, rule names, or policy structure).
 
-Agent isolation exists on a spectrum depending on integration model. The **sidecar pattern** provides network-level isolation — the agent process has no network path to governance infrastructure endpoints. The **SDK pattern** provides logical isolation — the GovernanceClient API surface is the only interface available, but it runs in the same process as the agent. Implementations MUST document their isolation level. For high-risk agent deployments, the sidecar pattern (network isolation) is RECOMMENDED.
+Agent isolation exists on a spectrum that depends on the integration model. The **sidecar pattern** provides network-level isolation, in that the agent process has no network path to governance infrastructure endpoints. The **SDK pattern** provides logical isolation, in that the GovernanceClient API surface is the only interface available, though it runs in the same process as the agent. Implementations MUST document their isolation level. For high-risk agent deployments, the sidecar pattern, with its network isolation, is RECOMMENDED.
 
 ### Guarantee 5: Credential Isolation
 
@@ -1099,7 +1117,7 @@ Agents never hold credentials, API keys, connection strings, or authentication t
 
 ### Guarantee 6: Decision Traceability
 
-Every action — whether allowed, denied, escalated, or attenuated — has a complete audit entry recording: who acted, what was attempted, which policy was in effect, which tier resolved the decision, why, and what the outcome was. The causal chain links the action to its originating human authorization.
+Every action, whether allowed, denied, escalated, or attenuated, has a complete audit entry recording who acted, what was attempted, which policy was in effect, which tier resolved the decision, why, and what the outcome was. The causal chain links the action to its originating human authorization.
 
 ### Guarantee 7: Tamper Evidence
 
@@ -1149,7 +1167,7 @@ Implementations MUST provide an emergency kill switch that immediately:
 - Fails all Policy Gate evaluations to DENY
 - Preserves the Audit Ledger (the kill switch does not destroy evidence)
 
-The kill switch is a human-initiated action. Resuming operations after a kill switch activation requires re-issuing authority grants through the normal grant creation process. Kill switch activations cannot be reversed by a single administrative action — the full grant creation workflow (with human authorization) must be repeated for each agent type.
+The kill switch is a human-initiated action. Resuming operations after a kill switch activation requires re-issuing authority grants through the normal grant creation process. Kill switch activations cannot be reversed by a single administrative action, since the full grant creation workflow, with human authorization, must be repeated for each agent type.
 
 ---
 
@@ -1157,7 +1175,7 @@ The kill switch is a human-initiated action. Resuming operations after a kill sw
 
 ### 7.1 Sidecar Pattern
 
-The primary integration model is the **governance sidecar** — a lightweight proxy process that sits between the agent runtime and external systems. The sidecar intercepts outbound calls at the network/system level, routes them through the governance layer, and returns results or denials to the agent.
+The primary integration model is the **governance sidecar**, a lightweight proxy process that sits between the agent runtime and external systems. The sidecar intercepts outbound calls at the network or system level, routes them through the governance layer, and returns results or denials to the agent.
 
 The sidecar pattern is borrowed from service mesh architecture (Envoy, Istio). It solves the same problem: enforcing policy across heterogeneous runtimes without modifying each one.
 
@@ -1236,9 +1254,9 @@ Adapters are implementation details, not part of the specification. The specific
 
 ## 8. Compliance Projections
 
-The specification captures comprehensive governance data — authority chains, policy evaluations, decision traces, trust histories, escalation resolutions. This data provides a control and record substrate that can be mapped to regulatory obligations. The specification does not itself constitute compliance with any regulation; it supports evidence production for compliance programs.
+The specification captures comprehensive governance data: authority chains, policy evaluations, decision traces, trust histories, and escalation resolutions. This data provides a control and record substrate that can be mapped to regulatory obligations. The specification does not itself constitute compliance with any regulation, though it supports the production of evidence for compliance programs.
 
-A **compliance projection** is a module that maps the specification's native event data to a specific regulatory framework's reporting requirements. Projections are configuration, not architecture. Adopting this specification does not equal compliance with any regulatory framework — it provides the underlying control and audit infrastructure that compliance programs require.
+A **compliance projection** is a module that maps the specification's native event data to a specific regulatory framework's reporting requirements. Projections are configuration rather than architecture. Adopting this specification does not by itself amount to compliance with any regulatory framework; it provides the underlying control and audit infrastructure that compliance programs require.
 
 ### 8.1 Projection Model
 
@@ -1270,7 +1288,7 @@ Mapping {
 
 ### 8.3 Projection Lifecycle
 
-Compliance projections are community-contributed and versioned independently from the specification. When a regulation changes, the projection is updated. The underlying governance architecture does not change — only the mapping layer.
+Compliance projections are community-contributed and versioned independently from the specification. When a regulation changes, the projection is updated. The underlying governance architecture does not change; only the mapping layer does.
 
 ---
 
@@ -1291,6 +1309,9 @@ This specification does not replace existing security architectures or constitut
 | **Certificate Transparency** | The Audit Ledger's append-only, cryptographically chained design borrows from Certificate Transparency's approach to tamper-evident logging. |
 | **Capability-Based Security** | Authority attenuation through delegation is borrowed from capability-based security (Capsicum, object-capabilities). |
 | **MCP (Model Context Protocol)** | MCP standardizes tool access. This specification standardizes governance of that access. An MCP adapter routes MCP tool calls through the governance layer. |
+| **AIP (Agent Identity Protocol)** | An emerging agent-identity standard that the Agent Identity Service (Section 3.2) can consume as its identity input. AIP carries identity, attenuated authority, and provenance in a signed token. Section 2.3 sets out how the governance layer reconciles such an input with its own guarantees. |
+| **Authenticated Delegation (MIT)** | A delegation model that extends OAuth and verifiable credentials, suitable as an identity input for agents that cross organizational boundaries, under the reconciliation rules in Section 2.3. |
+| **ACP (Agent Control Protocol)** | A temporal admission-control protocol whose stateful risk signals can be supplied to Tier 3 of the Policy Gate as further evidence, without displacing the four-outcome decision (Section 2.3). |
 
 ### 9.2 AI Governance Standards
 
@@ -1300,8 +1321,8 @@ This specification is a control-and-record substrate. It does not by itself sati
 |---|---|
 | **NIST AI RMF 1.0** | Provides technical controls supporting the MANAGE function (risk response via authority scoping, rate limits, damage budgets, and fail-closed behavior) and the MEASURE function (continuous monitoring via the Audit Ledger's decision record). GOVERN and MAP functions remain organizational responsibilities that this specification does not address. |
 | **NIST AI 600-1 (Generative AI Profile)** | Supports the incident-record requirements applicable to generative AI agents and the risk-response controls called out in the MANAGE function. Generative-AI-specific risks such as content provenance, synthetic-media disclosure, and training-data governance are out of scope. |
-| **ISO/IEC 42001:2023** | Supports Clause 8 (Operation — operational planning and control of AI systems) and Clause 9 (Performance evaluation — monitoring, measurement, internal audit) through the Policy Gate's enforcement record and the Audit Ledger's traceable decision history. Clauses 4–7 (context, leadership, planning, support) and Clause 10 (improvement) remain organizational responsibilities. |
-| **MITRE ATLAS** | Provides governance-layer containment for ATLAS techniques AML.T0051 (LLM Prompt Injection — see Section 1.3), AML.T0053 (LLM Plugin Compromise — via Execution Boundary credential isolation), and AML.T0057 (LLM Data Leakage — via credential and context isolation). Does not address model-layer techniques such as AML.T0043 (Craft Adversarial Data) or AML.T0054 (LLM Jailbreak). |
+| **ISO/IEC 42001:2023** | Supports Clause 8 (Operation: operational planning and control of AI systems) and Clause 9 (Performance evaluation: monitoring, measurement, internal audit) through the Policy Gate's enforcement record and the Audit Ledger's traceable decision history. Clauses 4–7 (context, leadership, planning, support) and Clause 10 (improvement) remain organizational responsibilities. |
+| **MITRE ATLAS** | Provides governance-layer containment for ATLAS techniques AML.T0051 (LLM Prompt Injection, see Section 1.3), AML.T0053 (LLM Plugin Compromise, via Execution Boundary credential isolation), and AML.T0057 (LLM Data Leakage, via credential and context isolation). Does not address model-layer techniques such as AML.T0043 (Craft Adversarial Data) or AML.T0054 (LLM Jailbreak). |
 | **OWASP LLM Top 10 (2025)** | Directly addresses LLM06 (Excessive Agency) through authority scoping, delegation invariants, and rate limits. Provides governance-layer containment for LLM01 (Prompt Injection) consequences, LLM02 (Sensitive Information Disclosure) via credential isolation, and LLM10 (Unbounded Consumption) via rate limits and damage budgets. Does not address LLM03 (Supply Chain), LLM04 (Data and Model Poisoning), LLM05 (Improper Output Handling), LLM07 (System Prompt Leakage), LLM08 (Vector and Embedding Weaknesses), or LLM09 (Misinformation). |
 | **EU AI Act (Regulation (EU) 2024/1689)** | For high-risk AI systems, supports obligations under Article 12 (Automatic logging) and Article 13 (Transparency and information to deployers) through the Audit Ledger's decision-traceability and causal-chain records. Article 14 (Human oversight) is supported architecturally through the Escalation Router but requires organizational implementation of review workflows. Articles 9, 10, 11, and 15, and conformity assessment obligations under Article 43, are out of scope. |
 
@@ -1318,7 +1339,7 @@ This section is non-normative. It provides recommendations for teams implementin
 Implementing the full specification at once is neither necessary nor advisable.
 
 **Phase 1: Identity and Authority**
-Deploy the Authority Registry and Agent Identity Service. Begin issuing identities and authority grants. This is the foundation — without identity and authority, nothing else works.
+Deploy the Authority Registry and Agent Identity Service. Begin issuing identities and authority grants. This is the foundation, since without identity and authority nothing else can operate.
 
 **Phase 2: Policy Gate in Audit Mode**
 Deploy the Policy Gate, but configure it to log decisions rather than enforce them. This lets you observe what would be blocked, tune policies, and build confidence before enforcement.
@@ -1330,13 +1351,13 @@ Wrap the tools that could cause the most damage first: database writes, external
 Once policies are tuned from audit data, switch to enforcement. Start with high-risk action classes and expand.
 
 **Phase 5: Audit Ledger with Causal Chaining**
-Upgrade from standard logs to the structured causal ledger. Backfilling causal links is impractical — start capturing them as soon as the ledger is deployed.
+Upgrade from standard logs to the structured causal ledger. Backfilling causal links is impractical, so begin capturing them as soon as the ledger is deployed.
 
 **Phase 6: Trust Engine**
-Deploy dynamic trust scoring. This requires sufficient audit history to be meaningful — deploying it too early produces unreliable trust assessments.
+Deploy dynamic trust scoring. This requires sufficient audit history to be meaningful, and deploying it too early produces unreliable trust assessments.
 
 **Phase 7: Output Evaluator**
-The most complex component and the least mature field. Deploy last, starting with high-risk output channels (customer-facing, agent-to-agent).
+This is the most complex component and rests on the least mature field, so deploy it last, starting with high-risk output channels such as customer-facing and agent-to-agent.
 
 **Phase 8: Escalation Router Optimization**
 Once escalation patterns are observed, begin the feedback loop: generating candidate rules, reviewing them, and promoting them to policy.
@@ -1387,7 +1408,7 @@ The governance layer itself must be secured:
 
 ## Appendix B: Normative Status by Profile
 
-This specification defines a **Core Profile** and four **Extension Profiles**. An implementation that satisfies all Core-normative requirements is a conforming Core implementation. Extensions are independently adoptable — an implementation may conform to Core plus any combination of extensions.
+This specification defines a **Core Profile** and four **Extension Profiles**. An implementation that satisfies all Core-normative requirements is a conforming Core implementation. Extensions are independently adoptable, so an implementation may conform to Core plus any combination of extensions.
 
 ### Core Profile (required for conformance)
 

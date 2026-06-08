@@ -1,6 +1,6 @@
 # Appendix C: Type Definitions
 
-This appendix defines all types referenced in the specification. These definitions are **normative for interoperability** — conforming implementations that claim interoperability MUST serialize and deserialize these types according to these definitions.
+This appendix defines all types referenced in the specification. These definitions are **normative for interoperability**, and conforming implementations that claim interoperability MUST serialize and deserialize these types according to these definitions.
 
 Implementations MAY extend types with additional fields. Extension fields MUST NOT conflict with defined fields. Consumers MUST ignore unrecognized fields.
 
@@ -30,7 +30,7 @@ enum OutputDecision {
 }
 ```
 
-**Design note:** REVISE was added based on review feedback. SUPPRESS blocks the output entirely. REVISE returns the output to the agent with structured findings, allowing the agent to correct scope violations without losing the compliant portions. The Output Evaluator does not modify the output — it provides feedback that the agent framework uses to prompt a revision.
+**Design note:** REVISE was added based on review feedback. SUPPRESS blocks the output entirely. REVISE returns the output to the agent with structured findings, allowing the agent to correct scope violations without losing the compliant portions. The Output Evaluator does not modify the output; it provides feedback that the agent framework uses to prompt a revision.
 
 ### EscalationDecision
 
@@ -65,7 +65,7 @@ enum GrantTerminationReason {
 }
 ```
 
-Used by the `AuthorityGrantTerminated` event. Distinct from `TerminationReason`, which applies to agent identities. A grant and an identity can each terminate for different reasons — for example, an identity may be `CASCADED` while its underlying grant remains `ACTIVE`.
+Used by the `AuthorityGrantTerminated` event. Distinct from `TerminationReason`, which applies to agent identities. A grant and an identity can each terminate for different reasons; for example, an identity may be `CASCADED` while its underlying grant remains `ACTIVE`.
 
 ### TrustTier
 
@@ -619,7 +619,7 @@ enum GovernanceErrorType {
 
 **Failure behavior:** When a GovernanceClient method encounters an infrastructure error (`GOVERNANCE_UNAVAILABLE`, `POLICY_EVALUATION_TIMEOUT`), it MUST fail-closed: `request_action` returns DENY, `request_spawn` fails, `submit_output` blocks synchronous outputs. The agent framework receives the error and MAY retry according to `retry_after_ms` if `retryable` is true.
 
-When a GovernanceClient method encounters an authority/identity error (`AUTHORITY_EXPIRED`, `IDENTITY_EXPIRED`, `IDENTITY_REVOKED`), retrying is pointless — the agent must be re-registered with a new identity or the grant must be renewed by a human.
+When a GovernanceClient method encounters an authority/identity error (`AUTHORITY_EXPIRED`, `IDENTITY_EXPIRED`, `IDENTITY_REVOKED`), retrying is pointless, and the agent must be re-registered with a new identity or the grant must be renewed by a human.
 
 ---
 
@@ -709,4 +709,4 @@ ExternalAnchor {
 }
 ```
 
-Implementations SHOULD support external anchoring. Publishing chain head hashes to an independent timestamping service at regular intervals allows detection of wholesale chain replacement — an attack that a self-contained hash chain cannot detect.
+Implementations SHOULD support external anchoring. Publishing chain head hashes to an independent timestamping service at regular intervals allows detection of wholesale chain replacement, an attack that a self-contained hash chain cannot detect.

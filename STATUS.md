@@ -2,7 +2,7 @@
 
 Single source of truth for artifact maturity, test coverage, and conformance state.
 
-Last updated: 2026-05-01
+Last updated: 2026-06-08
 
 ## Artifact Status
 
@@ -14,9 +14,9 @@ Last updated: 2026-05-01
 | Canonical algorithms (Appendix D) | Published, Core-normative (D.1-D.5); Extension-normative (D.6-D.8) | Reference implementation covers D.1-D.8 in full |
 | Governance-of-governance (Appendix E) | Published, Core/Extension-normative | Admin roles (5) with completed "Cannot" separation columns, dual control matrix, kill switch (E.3), graduated response levels (E.3.1), incident severity framework with on-call engagement targets (E.3.2), policy change freeze (E.4), infrastructure security (signing keys, independent monitoring with detection targets, chain integrity verification, grant termination monitoring, per-component backup RTO/RPO with restore drills), observability metrics including Grant Lifecycle and Governance-of-Governance metric subsections. |
 | Worked examples (Appendix F) | Published, non-normative | 9 end-to-end scenarios: allow, attenuate, escalate, delegation cascade, clean deny, authority expiration mid-task, tamper detection, fail-closed, Output Evaluator REVISE |
-| JSON Schema — types | Published | `schemas/types.schema.json` |
-| JSON Schema — events | Published | `schemas/events.schema.json` |
-| Protobuf definitions | Not started | Lower priority — JSON Schema covers primary need |
+| JSON Schema (types) | Published | `schemas/types.schema.json` |
+| JSON Schema (events) | Published | `schemas/events.schema.json` |
+| Protobuf definitions | Not started | Lower priority; JSON Schema covers primary need |
 
 ## Test Coverage
 
@@ -33,8 +33,8 @@ Last updated: 2026-05-01
 | Hash chain (D.5) | 6 | All pass | Full-entry canonical hash (RFC 8785 JCS), tamper detection (agent_id, decision, policy_version), SHA384 |
 | Trust engine (D.6) | 7 | All pass | Initial state, ALLOW/DENY/ESCALATE/TAMPER deltas, clamping, per-capability isolation, decay |
 | Tier 3 policy evaluation (D.7) | 7 | All pass | Fast-path, normal-with-audit, attenuate-on-mutating, read-only-allow, escalation-pattern override, mutating-verb detection |
-| Output evaluator — keyword overlap (D.8.1) | 4 | All pass | Full coverage, empty coverage, credential leak, out-of-scope capability reference |
-| Output evaluator — slot match (D.8.2) | 5 | All pass | Required topics met, forbidden topic mentioned, resource outside task scope, credential leak under slot-match, missing required topics |
+| Output evaluator: keyword overlap (D.8.1) | 4 | All pass | Full coverage, empty coverage, credential leak, out-of-scope capability reference |
+| Output evaluator: slot match (D.8.2) | 5 | All pass | Required topics met, forbidden topic mentioned, resource outside task scope, credential leak under slot-match, missing required topics |
 
 **Totals: 72 passed, 0 failed, 13 skipped**
 
@@ -76,6 +76,7 @@ Skipped: 2 require stateful identity simulation (covered by integration harness)
 | Second implementation | None. Primary remaining gap. |
 | Cross-implementation testing | Not performed. |
 | Profile boundaries | Explicit in Appendix B. Core vs Extension clearly delineated. |
+| Identity layer | Interface contract (§3.2). May be satisfied by an external identity standard (AIP, Authenticated Delegation) under the §2.3 reconciliation rules. |
 
 ## What "Conforming" Means
 
@@ -87,3 +88,5 @@ A **conforming Core implementation**:
 - Uses full canonical entry serialization for audit chain hashing
 
 A conforming Core implementation MAY omit Trust Engine (3.7), Output Evaluator (3.6), and Escalation Router (3.8). Actions that would reach Tier 3 are escalated instead. Agent outputs are not governed at the spec level. Escalation resolution is implementation-defined.
+
+The Agent Identity Service (3.2) is an interface contract. A conforming implementation may satisfy it with its own identity service or by consuming an external identity standard, such as AIP or the MIT Authenticated Delegation model, provided the reconciliation rules in Section 2.3 are met. The credential-isolating Execution Boundary, the Output Evaluator, the Audit Ledger, and the four-outcome Policy Gate decision remain defined by this specification.

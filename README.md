@@ -1,10 +1,10 @@
 # Agent Governance Specification
 
-A draft interoperability specification for governing autonomous AI agents in regulated enterprise systems. It defines the components, contracts, and event schemas a governance layer needs in order to sit between an agent and the systems it touches.
+A draft interoperability specification for the governance of autonomous AI agents in regulated enterprise systems. It defines the components, contracts, and event schemas that a governance layer needs in order to sit between an agent and the systems it touches, and it is designed to consume the agent-identity standards now emerging in the ecosystem rather than to reinvent them.
 
-Agent frameworks are now capable enough that companies are deploying them against production data and live APIs. The governance infrastructure has not kept up. A company running these systems cannot, today, hand an auditor a clean account of who authorized each agent's actions, what the bounds of that authority were, and how the authority moved when one agent handed work to another. LangChain, CrewAI, AutoGen, and the Claude SDK do not answer that question. This specification is an attempt to define the layer that does.
+Agent frameworks have grown capable enough that companies are deploying them against production data and live APIs, and the governance machinery around them has not kept pace. A company running these systems today cannot hand an auditor a clean account of who authorized each agent's actions, what the bounds of that authority were, and how authority moved when one agent passed work to another. LangChain, CrewAI, AutoGen, and the Claude SDK were not built to answer that question. This specification sets out to define the layer that does.
 
-The current revision is 0.5.0-draft. The Core Profile is fully specified, and the Python reference implementation passes all 102 executed tests across the algorithmic and behavioral suites; 13 further cases are skipped because they are exercised through the integration harness rather than directly. The specification has not been submitted to a standards body and has not been through working-group review. No team independent of the author has yet built a second implementation, so cross-implementation interoperability remains an unproven claim. See [STATUS.md](STATUS.md) for conformance state and [CHANGELOG.md](CHANGELOG.md) for revision history.
+The current revision is 0.6.0-draft. The Core Profile is fully specified, and the Python reference implementation passes all 102 executed tests across the algorithmic and behavioral suites; 13 further cases are skipped because they are exercised through the integration harness rather than directly. The specification has not been submitted to a standards body and has not been through working-group review. No team independent of the author has yet built a second implementation, so cross-implementation interoperability remains an unproven claim. See [STATUS.md](STATUS.md) for conformance state and [CHANGELOG.md](CHANGELOG.md) for revision history.
 
 ## Scope clarification
 
@@ -15,7 +15,7 @@ Being explicit about scope matters here, because the phrase "AI governance" carr
 - **Not a replacement for IAM or security tooling.** The specification assumes the surrounding identity, secrets, and network controls already exist. The governance layer sits above them and governs how a delegated agent uses what those systems already authorize.
 - **Not a finished product.** This repository contains a specification and a single reference implementation, not a drop-in platform. There is no managed service, no UI, no support contract.
 
-What the specification **is** is a governance control plane for delegated agent action — the layer that decides, records, and bounds what an autonomous agent is allowed to do on a human's behalf.
+What the specification **is** is a governance control plane for delegated agent action: the layer that decides, records, and bounds what an autonomous agent is allowed to do on a human's behalf.
 
 ## The governance gap
 
@@ -76,12 +76,12 @@ A conforming implementation preserves nine properties regardless of agent behavi
 
 Most readers of this repository will not run the Python files. The path below is for the recruiter, CTO, general counsel, board member, or investor who wants to assess what the specification actually is, in roughly five minutes, without becoming an implementer.
 
-1. **Read the thesis** — the opening of this README, through the System Guarantees table. Two minutes. That establishes what problem the specification is solving and the nine properties a conforming implementation preserves.
-2. **Inspect the Core Profile** — the five-component table above. The whole architecture rests on those five components and the contracts between them. Anything labelled "Extension" is optional.
-3. **Run the demo** — `python3 simulation/demo.py` from the repository root. It prints a narrated walkthrough of allow, attenuate, escalate, deny, and delegation scenarios with audit-chain output. Skip this if you do not have Python handy; the output is also readable directly in `simulation/demo.py`.
-4. **Inspect one conformance vector** — open `tests/conformance-vectors.json` and search for `PE-mixed`. It is the test case that says: when a policy rule is ALLOW with mixed categorical and numeric constraint failures, the engine MUST DENY rather than attenuate. That single rule prevents a class of authority-leak bugs and is the kind of edge case that demonstrates the specification is written at the level of detail an implementer needs.
-5. **Read one worked example** — `spec/04-worked-examples.md`, section F.4 ("Delegation Cascade with Authority Narrowing"). It traces a parent agent spawning a child agent and shows how authority narrows, how the audit chain records the cascade, and what the events look like end-to-end. This is the scenario most distinct from ordinary IAM.
-6. **Read [STATUS.md](STATUS.md)** — current artifact maturity, test coverage, and the gaps the author has not closed.
+1. **Read the thesis**: the opening of this README, through the System Guarantees table. Two minutes. That establishes what problem the specification is solving and the nine properties a conforming implementation preserves.
+2. **Inspect the Core Profile**: the five-component table above. The whole architecture rests on those five components and the contracts between them. Anything labelled "Extension" is optional.
+3. **Run the demo**: `python3 simulation/demo.py` from the repository root. It prints a narrated walkthrough of allow, attenuate, escalate, deny, and delegation scenarios with audit-chain output. Skip this if you do not have Python handy; the output is also readable directly in `simulation/demo.py`.
+4. **Inspect one conformance vector**: open `tests/conformance-vectors.json` and search for `PE-mixed`. It is the test case that says: when a policy rule is ALLOW with mixed categorical and numeric constraint failures, the engine MUST DENY rather than attenuate. That single rule prevents a class of authority-leak bugs and is the kind of edge case that demonstrates the specification is written at the level of detail an implementer needs.
+5. **Read one worked example**: `spec/04-worked-examples.md`, section F.4 ("Delegation Cascade with Authority Narrowing"). It traces a parent agent spawning a child agent and shows how authority narrows, how the audit chain records the cascade, and what the events look like end-to-end. This is the scenario most distinct from ordinary IAM.
+6. **Read [STATUS.md](STATUS.md)**: current artifact maturity, test coverage, and the gaps the author has not closed.
 
 That sequence is enough to evaluate whether the specification is serious, what it covers, and what it does not.
 
@@ -108,13 +108,15 @@ The Core Profile is fully specified. The Python reference implementation covers 
 
 The specification has also been hardened through a clean-room exercise. A second Python implementation was built using only the specification text, the JSON Schemas, and the conformance vectors, without reference to the original implementation. Two independent rounds of adversarial review then ran against the result. Between them they identified one security-critical attenuation rule, four schema violations, and a precedence inversion in the failure-handling algorithm. All findings were corrected.
 
-The biggest remaining gap is not in the specification itself. It is the absence of an independently authored second implementation. Until two unrelated codebases run the same conformance vectors and produce the same results, the specification's portability claim is unproven.
+The biggest remaining gap is the absence of an independently authored second implementation, and it lies outside the specification text itself. Until two unrelated codebases run the same conformance vectors and produce the same results, the specification's portability claim remains unproven.
 
-Closing that gap is the next public milestone. An engineer or team building a second implementation — in any language — against the published specification, JSON Schemas, and conformance vectors would establish interoperability in the only way that counts. Contact through the channels in [CONTRIBUTING.md](CONTRIBUTING.md) is welcome.
+Closing that gap is the next public milestone. An engineer or team building a second implementation in any language, against the published specification, JSON Schemas, and conformance vectors, would supply the independent confirmation the portability claim currently lacks. Contact through the channels in [CONTRIBUTING.md](CONTRIBUTING.md) is welcome.
 
 ## Standards positioning
 
-The specification has not been submitted to NIST, ISO, IEEE, OASIS, or any industry working group. It is one author's draft. Most revisions have come from writing reference implementations against the specification and finding gaps in the text. Section 9.2 maps the specification's controls to NIST AI RMF, ISO/IEC 42001, MITRE ATLAS, the OWASP LLM Top 10, and the EU AI Act. The mappings are illustrative; adopting this specification does not on its own satisfy any cited regulation.
+The specification has not been submitted to NIST, ISO, IEEE, OASIS, or any industry working group. It is one author's draft, and most of its revisions have come from writing reference implementations against it and finding the gaps in the text.
+
+Its place in the landscape is deliberate. Rather than compete with the agent-identity work now emerging, such as AIP and the MIT Authenticated Delegation model, the specification is built to consume that work as an identity input and to concentrate on the layers those efforts leave open: holding credentials away from the agent at the Execution Boundary, governing what agents say and not only what they do, and projecting the resulting record onto the named compliance frameworks. Section 9.2 maps the specification's controls to the NIST AI RMF, ISO/IEC 42001, MITRE ATLAS, the OWASP LLM Top 10, and the EU AI Act. Those mappings are illustrative, and adopting the specification does not on its own satisfy any regulation it cites.
 
 ## Contributing
 

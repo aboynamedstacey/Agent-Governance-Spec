@@ -6,7 +6,7 @@ F.1–F.3 cover the Policy Gate's three permissive outcomes at Tiers 1 and 2 (al
 
 ---
 
-## F.1 Simple Allow — Database Query
+## F.1 Simple Allow: Database Query
 
 A research agent queries a database. The action is within scope, satisfies all constraints, and resolves at Tier 1.
 
@@ -37,8 +37,8 @@ A research agent queries a database. The action is within scope, satisfies all c
 ### Evaluation Trace
 
 **Tier 1: Deterministic Rule Check**
-1. Identity valid? `agent-abc123` — signed, unexpired. **Pass.**
-2. Authority expired? Grant `grant-research-001` — active, within TTL. **Pass.**
+1. Identity valid? `agent-abc123` is signed and unexpired. **Pass.**
+2. Authority expired? Grant `grant-research-001` is active and within TTL. **Pass.**
 3. Action in scope? `database.query` matches `database.*` in authorized_actions with decision ALLOW. **Match found.**
 4. Rate limit? 0/100 queries in current window. **Pass.**
 5. **Decision: ALLOW at Tier 1.** No need to proceed to Tier 2.
@@ -77,7 +77,7 @@ Total latency added by governance: <1ms (Tier 1 in-memory evaluation only).
 
 ---
 
-## F.2 Attenuation — Bulk Write Reduced
+## F.2 Attenuation: Bulk Write Reduced
 
 An agent attempts to write 200 records. Policy allows writes but constrains batch size to 50. The action is attenuated rather than denied.
 
@@ -104,12 +104,12 @@ An agent attempts to write 200 records. Policy allows writes but constrains batc
 **Tier 1: Deterministic Rule Check**
 1. Identity valid? **Pass.**
 2. Authority active? **Pass.**
-3. Action in scope? `database.write` matches rule with decision ALLOW. **Match found — but has constraints, proceed to Tier 2.**
+3. Action in scope? `database.write` matches rule with decision ALLOW. **Match found, but it has constraints, so proceed to Tier 2.**
 4. Rate limit? **Pass.**
 
 **Tier 2: Constraint Evaluation**
 5. Constraint: `record_count LESS_THAN_OR_EQUAL 50`. Actual value: 200. **Constraint violated.**
-6. Attenuation possible? Yes — numeric constraint can be capped. Attenuate `record_count` from 200 to 50.
+6. Attenuation possible? Yes, the numeric constraint can be capped. Attenuate `record_count` from 200 to 50.
 7. **Decision: ATTENUATE at Tier 2.**
 
 ### Attenuation Record
@@ -404,7 +404,7 @@ Event: ActionDenied      evt-106   causal_parent: evt-105
 
 ### What the Agent Framework Sees
 
-The child receives DENY with `reason_code = SCOPE_VIOLATION`. The reason code does not reveal that the parent *did* have write authority — the Policy Gate evaluates against the child's identity only. The agent framework may terminate the child, retry with a narrower action, or request re-delegation via a human-initiated grant.
+The child receives DENY with `reason_code = SCOPE_VIOLATION`. The reason code does not reveal that the parent *did* have write authority, since the Policy Gate evaluates against the child's identity only. The agent framework may terminate the child, retry with a narrower action, or request re-delegation via a human-initiated grant.
 
 ### Causal Chain
 
@@ -421,7 +421,7 @@ Both the successful read and the denied write trace back to the same human grant
 
 ---
 
-## F.5 Clean DENY — Out-of-Scope Action
+## F.5 Clean DENY: Out-of-Scope Action
 
 An agent attempts an action that is not in its authority at all. Denied at Tier 1 with no attenuation attempted. Demonstrates Guarantee 4 (Agent Isolation) in the structure of the DENY response.
 
@@ -448,7 +448,7 @@ An agent attempts an action that is not in its authority at all. Denied at Tier 
 1. Identity valid? **Pass.**
 2. Authority active? **Pass.**
 3. Action in scope? `admin.users.delete` has no matching rule in the agent's authorized_actions. Default deny applies.
-4. Attenuation possible? Not applicable — the action is entirely outside scope. Attenuation applies only when an action is within scope, the matching rule is ALLOW, and the violated constraints are non-strict numeric bounds (LTE/GTE) per D.2 Attenuation Eligibility. See Section 3.3 Decision Types.
+4. Attenuation possible? Not applicable, since the action is entirely outside scope. Attenuation applies only when an action is within scope, the matching rule is ALLOW, and the violated constraints are non-strict numeric bounds (LTE/GTE) per D.2 Attenuation Eligibility. See Section 3.3 Decision Types.
 5. **Decision: DENY at Tier 1.** Reason: `SCOPE_VIOLATION`.
 
 ### DENY Response Returned to Agent
@@ -489,7 +489,7 @@ Event: ActionDenied
   causal_parent: "evt-201"
 ```
 
-Note that `reason_detail` in the audit entry may carry more information than the agent sees. The Audit Ledger is not subject to Agent Isolation — the detail is for auditors, not agents. The agent receives only `reason_code`.
+Note that `reason_detail` in the audit entry may carry more information than the agent sees. The Audit Ledger is not subject to Agent Isolation, so the detail is available to auditors though not to agents. The agent receives only `reason_code`.
 
 ---
 
@@ -525,7 +525,7 @@ An agent's grant TTL elapses while the agent is still active. One action is alre
 | 14:00:05 | Agent submits Action #2: `report.generate`. |
 | 14:00:05 | Policy Gate evaluates → DENY with `AUTHORITY_EXPIRED`. |
 
-### Action #1 — In-Flight at Expiration
+### Action #1: In-Flight at Expiration
 
 Per Section 3.2, in-flight actions that have already passed the Policy Gate complete normally. Their results are annotated.
 
@@ -551,7 +551,7 @@ Event: ActionExecuted
 
 The annotation is recorded in the audit entry but does not invalidate the result. The action was authorized at the moment of Policy Gate evaluation.
 
-### Grant Expiration — System-Driven Event
+### Grant Expiration: System-Driven Event
 
 At 14:00:00 the grant's TTL elapses. The expiration is recorded as a system-driven audit entry with null `causal_parent` and a `reason_code` identifying the trigger (Section 3.5 causal completeness requirement).
 
@@ -567,7 +567,7 @@ Event: AuthorityGrantTerminated
   causal_parent: null
 ```
 
-### Action #2 — After Expiration
+### Action #2: After Expiration
 
 Per Section 3.2, new actions after expiration receive `AUTHORITY_EXPIRED`, distinct from `SCOPE_VIOLATION`. This allows the agent framework to handle renewal or graceful shutdown rather than retrying with different parameters.
 
@@ -596,7 +596,7 @@ If `agent-research-302` had spawned children, they would have been terminated wi
 
 ### What the Agent Framework Should Do
 
-Because the denial reason is `AUTHORITY_EXPIRED` rather than `SCOPE_VIOLATION`, the framework has an unambiguous signal that renewal — not retry — is the correct response. It may:
+Because the denial reason is `AUTHORITY_EXPIRED` rather than `SCOPE_VIOLATION`, the framework has an unambiguous signal that renewal, rather than retry, is the correct response. It may:
 
 - Request identity renewal if the agent's identity TTL is separate and still active.
 - Request a new grant from a human.
@@ -608,7 +608,7 @@ Because the denial reason is `AUTHORITY_EXPIRED` rather than `SCOPE_VIOLATION`, 
 
 An external auditor invokes `verify_integrity` on the Audit Ledger. A modification to a historical entry is detected because the computed previous-entry hash no longer matches the stored hash. Demonstrates Guarantee 7 (Tamper Evidence).
 
-This scenario does not involve an agent. It is a governance-of-governance operation — the infrastructure verifying its own integrity.
+This scenario does not involve an agent. It is a governance-of-governance operation, the infrastructure verifying its own integrity.
 
 ### Setup
 
@@ -648,7 +648,7 @@ The auditor cross-references with published anchor points:
 - `entry-0100` (anchored 2026-04-15): chain recomputation matches the anchor. Chain is intact through 0100.
 - `entry-1000` (anchored 2026-04-19): chain recomputation matches the anchor. Chain is intact through 1000.
 
-Because `entry-0342` falls between two valid anchors, a single-entry modification is narrowed to a specific time window: it occurred after the original write (before 2026-04-15 anchoring) but after the entry was anchored. This means the break is post-anchor — the modification tampered with an already-anchored entry, which external anchoring is specifically designed to detect.
+Because `entry-0342` falls between two valid anchors, the timing of the modification is bounded: it occurred after the entry was originally written, and after the 2026-04-15 anchor was published. The break is therefore post-anchor, a tamper with an entry whose surrounding chain was already externally anchored, which is exactly what external anchoring is designed to expose.
 
 ### Structured Verification Result
 
@@ -675,16 +675,16 @@ Because `entry-0342` falls between two valid anchors, a single-entry modificatio
 
 ### What This Does Not Detect
 
-- **Wholesale chain replacement.** If an attacker replaces the entire chain, a self-contained walk would succeed. External anchoring (Section 3.5) defends against this — the anchors would not match the replaced chain head.
+- **Wholesale chain replacement.** If an attacker replaces the entire chain, a self-contained walk would succeed. External anchoring (Section 3.5) defends against this, since the anchors would not match the replaced chain head.
 - **Omission of never-anchored entries.** Entries added and removed between two anchor publications without propagating forward are only detectable by replaying from a trusted anchor point and comparing expected vs. actual entries.
 
 ### Audit Response
 
-Integrity break is a governance-of-governance incident (Appendix E). It is not automatically remediated — the spec does not define what happens after detection. The implementing organization's incident response governs: the broken entry is quarantined, a forensic copy is preserved, and the break is reported to the parties identified in the administrative controls.
+Integrity break is a governance-of-governance incident (Appendix E). It is not automatically remediated, and the spec does not define what happens after detection. The implementing organization's incident response governs: the broken entry is quarantined, a forensic copy is preserved, and the break is reported to the parties identified in the administrative controls.
 
 ---
 
-## F.8 Fail-Closed — Policy Gate Unreachable
+## F.8 Fail-Closed: Policy Gate Unreachable
 
 The Execution Boundary loses connectivity to the Policy Gate. Per Guarantee 8, actions are denied. Demonstrates the fail-closed default defined in Section 6.
 
@@ -712,7 +712,7 @@ The Execution Boundary loses connectivity to the Policy Gate. Per Guarantee 8, a
 
 The agent's GovernanceClient calls `request_action`. The Execution Boundary attempts to consult the Policy Gate.
 
-1. Open connection to Policy Gate — **timeout after 500ms**.
+1. Open connection to Policy Gate; **timeout after 500ms**.
 2. Circuit breaker is already OPEN (from prior failure). No further attempts within the circuit-open window.
 3. Per Section 7.2 and Guarantee 8: on infrastructure error, `request_action` MUST return DENY.
 4. Execution Boundary returns DENY with `GovernanceError.GOVERNANCE_UNAVAILABLE`.
@@ -729,7 +729,7 @@ The agent's GovernanceClient calls `request_action`. The Execution Boundary atte
 }
 ```
 
-Note `tier: null` — no tier resolved the decision because no tier was reached. `policy_version: null` for the same reason. The agent cannot distinguish this case from a policy-level denial beyond the `reason_code` and should handle it as a governance outage (back off, report, optionally terminate).
+Note `tier: null`: no tier resolved the decision because none was reached. `policy_version: null` for the same reason. The agent cannot distinguish this case from a policy-level denial beyond the `reason_code` and should handle it as a governance outage (back off, report, optionally terminate).
 
 ### Events Emitted
 
@@ -769,7 +769,7 @@ The circuit breaker periodically probes the Policy Gate. When it recovers:
 2. An audit entry records the circuit state change (Section 6 Circuit Breaker requirement #5).
 3. Normal `request_action` evaluation resumes.
 
-There is no retroactive re-evaluation of denied actions. An action that was denied while the gate was down is not retried by the governance layer — the agent or its framework must re-submit if appropriate.
+There is no retroactive re-evaluation of denied actions. An action that was denied while the gate was down is not retried by the governance layer, and the agent or its framework must re-submit if appropriate.
 
 ### Risk-Class Overrides
 
@@ -777,7 +777,7 @@ Section 6 permits implementations to define risk-class overrides (e.g., read-onl
 
 ---
 
-## F.9 Output Evaluator Intervention — REVISE
+## F.9 Output Evaluator Intervention: REVISE
 
 An email-drafting agent produces a draft containing content outside its assigned scope. The Output Evaluator returns REVISE with structured findings. The agent framework prompts a revision; the second draft passes. Demonstrates the Output Governance extension (Section 3.6) and the REVISE decision path.
 
@@ -818,7 +818,7 @@ The Output Evaluator runs scope alignment (D.8.2 Slot Match).
 |---|---|
 | acknowledge_receipt | Yes ("Thank you for your inquiry") |
 | confirm_meeting | Yes ("I confirm our meeting for Thursday at 2pm") |
-| clarify_next_steps | Partially ("Looking forward to Thursday" — weak) |
+| clarify_next_steps | Partially ("Looking forward to Thursday", weak) |
 
 | Forbidden topic | Mentioned? |
 |---|---|
@@ -861,7 +861,7 @@ The Output Evaluator runs scope alignment (D.8.2 Slot Match).
 }
 ```
 
-Decision is REVISE (not SUPPRESS): the compliant portions — acknowledgment and meeting confirmation — are preserved. The framework receives structured findings to prompt a revision rather than discarding the entire draft.
+The decision is REVISE rather than SUPPRESS: the compliant portions, the acknowledgment and the meeting confirmation, are preserved. The framework receives structured findings to prompt a revision rather than discarding the entire draft.
 
 ### Agent's Second Draft
 
@@ -929,8 +929,8 @@ Event: ActionExecuted
   causal_parent: "evt-501"
 ```
 
-Both evaluations — the rejected first draft and the released second draft — are in the audit chain. An auditor can reconstruct: the agent initially produced out-of-scope content, received structured feedback, revised successfully, and only then executed the send.
+Both evaluations, the rejected first draft and the released second draft, are in the audit chain. An auditor can reconstruct: the agent initially produced out-of-scope content, received structured feedback, revised successfully, and only then executed the send.
 
 ### What the Governance Layer Does Not Do
 
-The Output Evaluator does not rewrite the draft. It does not select language. It does not collaborate with the agent on what the email should say. It releases, suppresses, escalates, or returns findings. Per the design principle in Section 3.6: "the governance layer constrains agents without collaborating with them — it says 'this is wrong and here is why,' not 'let me fix it for you.'" The revision loop is the agent framework's responsibility, not the governance layer's.
+The Output Evaluator does not rewrite the draft. It does not select language, and it does not collaborate with the agent on what the email should say. It releases, suppresses, escalates, or returns findings. Per the design principle in Section 3.6, the governance layer constrains agents without collaborating with them: it says "this is wrong and here is why," and it does not say "let me fix it for you." The revision loop is the agent framework's responsibility, not the governance layer's.
