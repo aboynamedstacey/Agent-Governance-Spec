@@ -15,14 +15,7 @@ It proves the tested requests produce these effects:
 
 Regression tests also exercise audit write failure, decision tampering, exact
 expiration, invalid parameters, and reconstruction of grantor, grant, lineage,
-policy snapshot, request, decision, and outcome. The fixture blocks ATTENUATE
-rather than execute unmodified parameters. Its workflow records are illustrative
-internal records, not full wire-schema event instances.
-
-The agent side is a sequence of tool requests, not an LLM integration. There is
-no measured prompt-injection detection rate. SQLite effects demonstrate request
-containment. Same-process code is not adversarially isolated; an untrusted agent
-must never receive a reference to the boundary or store in a deployment.
+policy snapshot, request, decision, and outcome. The fixture blocks ATTENUATE pending a validated transformed request.
 
 ## First deployment acceptance criteria
 
@@ -62,11 +55,4 @@ refinements, byte-identical audit canonicalization, and failure behavior. Test
 unicode keys, numeric representations, wildcard exceptions, expiry boundaries,
 and outcome-evidence replay. This revision does not supply independent authorship.
 
-## Remaining reference limits
-
-The integration stack uses mutable in-memory state and test identities. It is not
-a signed-token identity service, persistent authority registry, network sandbox,
-production secrets proxy, distributed budget enforcer, or complete event-schema
-emitter. Its escalation harness illustrates lifecycle messages, not an actual
-human authentication or remote execution service. Passing its tests must not be
-represented as end-to-end Core conformance for a deployed system.
+Implementation boundaries and coverage are recorded in [STATUS.md](../STATUS.md).
