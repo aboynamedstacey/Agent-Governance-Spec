@@ -4,6 +4,117 @@
   "title": "Agent Governance Specification — Core Type Definitions",
   "description": "Machine-readable schemas for all types defined in Appendix C of the specification. These schemas are normative for interoperability.",
   "$defs": {
+    "TrustOutcomeEvidence": {
+      "type": "object",
+      "required": [
+        "evidence_id",
+        "action_id",
+        "observer_id",
+        "criterion",
+        "agent_id",
+        "capability",
+        "outcome"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observer_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "criterion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capability": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "enum": [
+            "VERIFIED_SUCCESS",
+            "VERIFIED_FAILURE",
+            "TAMPER"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LexicalOutputAssessment": {
+      "type": "object",
+      "required": [
+        "scope_alignment",
+        "findings",
+        "recommendation",
+        "method",
+        "assessment_scope",
+        "semantic_assurance"
+      ],
+      "properties": {
+        "scope_alignment": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "type",
+              "detail",
+              "severity"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "recommendation": {
+          "enum": [
+            "PASS",
+            "FLAG",
+            "BLOCK"
+          ]
+        },
+        "method": {
+          "enum": [
+            "keyword_overlap",
+            "slot_match"
+          ]
+        },
+        "assessment_scope": {
+          "const": "lexical_only"
+        },
+        "semantic_assurance": {
+          "const": false
+        }
+      },
+      "additionalProperties": false
+    },
     "Decision": {
       "type": "string",
       "enum": ["ALLOW", "DENY", "ESCALATE", "ATTENUATE"]
