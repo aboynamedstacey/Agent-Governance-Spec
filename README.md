@@ -2,9 +2,37 @@
 
 A draft interoperability specification for the governance of autonomous AI agents in regulated enterprise systems. It defines the components, contracts, and event schemas that a governance layer needs in order to sit between an agent and the systems it touches, and it is designed to consume the agent-identity standards now emerging in the ecosystem rather than to reinvent them.
 
-Agent frameworks have grown capable enough that companies are deploying them against production data and live APIs, and the governance machinery around them has not kept pace. A company running these systems today cannot hand an auditor a clean account of who authorized each agent's actions, what the bounds of that authority were, and how authority moved when one agent passed work to another. LangChain, CrewAI, AutoGen, and the Claude SDK were not built to answer that question. This specification sets out to define the layer that does.
+Agent frameworks have grown capable enough that companies are deploying them against production data and live APIs, and the governance machinery around them has not kept pace. The engineering problem is to produce a consistent account of who authorized each action, how that authority was bounded, and what changed during delegation across runtimes. This specification defines contracts for that layer; deployments must evaluate how their existing identity and agent tooling already meets them.
 
-The current revision is 0.6.0-draft. The Core Profile is fully specified, and the Python reference implementation passes all 102 executed tests across the algorithmic and behavioral suites; 13 further cases are skipped because they are exercised through the integration harness rather than directly. The specification has not been submitted to a standards body and has not been through working-group review. No team independent of the author has yet built a second implementation, so cross-implementation interoperability remains an unproven claim. See [STATUS.md](STATUS.md) for conformance state and [CHANGELOG.md](CHANGELOG.md) for revision history.
+The current revision is **0.7.0-draft**. The repository includes normative
+contracts, machine-readable schemas, a Python reference implementation, and
+an executable local tool workflow. Delegation checks preserve effective
+first-match authority; trust updates consume verified outcomes; lexical output
+checks carry explicit evidence limits and a delivery gate.
+
+This is an author's draft, not a ratified standard or production platform.
+No independently authored second implementation has been validated. See
+[STATUS.md](STATUS.md) for measured coverage, limitations, and next milestones.
+
+## Run the controls
+
+Requires Python 3.10 or later. From the repository root:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python simulation/reference_algorithms.py
+python simulation/integration_tests.py
+python -m unittest discover -s simulation -p 'test_*.py'
+python simulation/workflow.py
+```
+
+The workflow creates a real draft in a temporary SQLite database, blocks an
+unauthorized send request representative of prompt injection, rejects a
+recipient-cap violation, and blocks a delegated child after grant revocation.
+It checks database effects and the audit chain. It does not invoke an LLM,
+connect to a cloud account, or establish an OS isolation boundary. It tests
+containment of requests a model could emit, not resistance to model deception.
+[Workflow and acceptance criteria](docs/operational-validation.md).
 
 ## Scope clarification
 
@@ -19,7 +47,7 @@ What the specification **is** is a governance control plane for delegated agent 
 
 ## The governance gap
 
-Five questions come up in every regulated agent deployment, and none of the major frameworks answer them on their own:
+The specification organizes agent control around five questions:
 
 1. What is each agent authorized to do, by whom, and until when?
 2. What did each agent actually do, and on what evidence was the action permitted?
@@ -27,7 +55,9 @@ Five questions come up in every regulated agent deployment, and none of the majo
 4. What evidence will support compliance review, regulatory inquiry, or incident reconstruction?
 5. Does the same governance framework cover an agent's outputs (text, recommendations, messages to other agents) alongside its actions, or are those handled by separate tooling?
 
-The closest commercial products solve part of the problem, typically by filtering agent output for safety or by wrapping tool calls to control which APIs an agent can hit. Few cover both surfaces, and almost none track how authority moves between agents, keep credentials out of the agent runtime, or maintain audit records that survive investigation.
+The intended contribution is a portable contract joining authority, enforcement,
+and evidence across agent runtimes. The repository does not establish feature
+uniqueness against current commercial products or demonstrate customer demand.
 
 ## Design
 
@@ -54,7 +84,7 @@ From this premise the specification derives a Core Profile of five components, p
 ### Extension Profiles
 
 - **Trust-Adjusted Evaluation** adjusts the level of scrutiny each action receives based on the agent's track record, without expanding the agent's underlying authority.
-- **Output Governance** evaluates agent outputs against the task and authority scope, not only agent actions.
+- **Output Governance** supplies lexical task checks and a delivery gate. High-risk release requires separate authenticated review; lexical PASS is not semantic assurance.
 - **Adaptive Escalation** routes unresolved decisions to human review and promotes resolved cases to candidate policy rules through a separation-of-duties workflow.
 - **Compliance Projection** maps the specification's controls to NIST AI RMF, ISO/IEC 42001, the EU AI Act, MITRE ATLAS, and the OWASP LLM Top 10.
 
@@ -78,7 +108,7 @@ Most readers of this repository will not run the Python files. The path below is
 
 1. **Read the thesis**: the opening of this README, through the System Guarantees table. Two minutes. That establishes what problem the specification is solving and the nine properties a conforming implementation preserves.
 2. **Inspect the Core Profile**: the five-component table above. The whole architecture rests on those five components and the contracts between them. Anything labelled "Extension" is optional.
-3. **Run the demo**: `python3 simulation/demo.py` from the repository root. It prints a narrated walkthrough of allow, attenuate, escalate, deny, and delegation scenarios with audit-chain output. Skip this if you do not have Python handy; the output is also readable directly in `simulation/demo.py`.
+3. **Run the local workflow**: `python simulation/workflow.py`. It executes real local tool effects through a boundary and verifies that denied requests produce no side effects. The separate `simulation/demo.py` remains an illustrative narrative, not a production implementation.
 4. **Inspect one conformance vector**: open `tests/conformance-vectors.json` and search for `PE-mixed`. It is the test case that says: when a policy rule is ALLOW with mixed categorical and numeric constraint failures, the engine MUST DENY rather than attenuate. That single rule prevents a class of authority-leak bugs and is the kind of edge case that demonstrates the specification is written at the level of detail an implementer needs.
 5. **Read one worked example**: `spec/04-worked-examples.md`, section F.4 ("Delegation Cascade with Authority Narrowing"). It traces a parent agent spawning a child agent and shows how authority narrows, how the audit chain records the cascade, and what the events look like end-to-end. This is the scenario most distinct from ordinary IAM.
 6. **Read [STATUS.md](STATUS.md)**: current artifact maturity, test coverage, and the gaps the author has not closed.
@@ -99,16 +129,19 @@ That sequence is enough to evaluate whether the specification is serious, what i
 | `tests/conformance-vectors.json` | Conformance test vectors used by the reference implementation. |
 | `simulation/reference_algorithms.py` | Python reference implementation; normative for Appendix D. |
 | `simulation/integration_tests.py` | Behavioral and integration test harness. |
+| `simulation/workflow.py` | Executable local tool effects and authority containment. |
+| `simulation/test_security_regressions.py` | Adversarial regression suite. |
+| `docs/operational-validation.md` | Evidence limits and production acceptance criteria. |
 | `STATUS.md` | Current conformance and coverage state. |
 | `CHANGELOG.md` | Revision history. |
 
 ## Maturity and conformance
 
-The Core Profile is fully specified. The Python reference implementation covers all Appendix D algorithms (D.1 through D.8). The repository ships with two test harnesses. The algorithmic harness checks each algorithm against the published conformance vectors. The behavioral harness exercises delegation cascades, authority expiration, escalation lifecycles, and audit-chain integrity.
+The Core Profile has normative contracts and executable reference algorithms. The algorithmic suite checks published vectors; the integration harness checks lifecycle behavior; adversarial regressions challenge authority refinement, outcome-evidence replay, output release, and real local side effects. These tests do not certify a production deployment.
 
 The specification has also been hardened through a clean-room exercise. A second Python implementation was built using only the specification text, the JSON Schemas, and the conformance vectors, without reference to the original implementation. Two independent rounds of adversarial review then ran against the result. Between them they identified one security-critical attenuation rule, four schema violations, and a precedence inversion in the failure-handling algorithm. All findings were corrected.
 
-The biggest remaining gap is the absence of an independently authored second implementation, and it lies outside the specification text itself. Until two unrelated codebases run the same conformance vectors and produce the same results, the specification's portability claim remains unproven.
+Two remaining gates are independent interoperability testing and a production deployment that demonstrates isolation, durable evidence, revocation under concurrency, and failure recovery. Until two unrelated codebases run the same conformance vectors and produce the same results, the specification's portability claim remains unproven.
 
 Closing that gap is the next public milestone. An engineer or team building a second implementation in any language, against the published specification, JSON Schemas, and conformance vectors, would supply the independent confirmation the portability claim currently lacks. Contact through the channels in [CONTRIBUTING.md](CONTRIBUTING.md) is welcome.
 
