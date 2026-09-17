@@ -1,9 +1,9 @@
 # Agent Governance Specification
 
-**Version:** 0.6.0-draft
+**Version:** 0.7.0-draft
 **Status:** Draft Interoperability Specification
 **Author:** aboynamedstacey
-**Date:** 2026-06-08
+**Date:** 2026-09-17
 **License:** Apache 2.0
 
 ---
@@ -248,7 +248,7 @@ If ALLOW:
   → Audit Ledger records: action, identity, policy version, decision, tier, outcome
   
 If ATTENUATE:
-  → Execution Boundary proxies a modified action (read-only, redacted, scoped)
+  → Execution Boundary proxies the request with validated numeric clamps
   → Attenuated result returned to agent
   → Audit Ledger records: original request, attenuation applied, outcome
 
@@ -535,7 +535,7 @@ Inspects action parameters against policy constraints. Still deterministic, but 
 - "Can execute transactions under $10,000." Check the amount.
 - "Can access data, but only at classification level X or below." Check the data classification.
 
-If constraints cannot be fully satisfied, evaluate whether attenuation is possible. If the agent requests read-write access and only read is authorized, attenuate to read-only rather than denying outright.
+If constraints cannot be fully satisfied, apply D.2 numeric attenuation only when every failing constraint is eligible. Other transformations require separately specified semantics; otherwise deny or escalate.
 
 Resolution at Tier 2 is sub-millisecond to low millisecond.
 
@@ -602,13 +602,13 @@ Agent → Policy Gate (decision) → Execution Boundary (proxies action) → Too
 | Operation | Description |
 |---|---|
 | `execute` | Proxy an allowed action to the target tool/API. Apply attenuation if specified. Return result to agent. |
-| `execute_attenuated` | Proxy a modified version of the action (read-only, redacted, scoped). |
+| `execute_attenuated` | Proxy an action with validated numeric clamps under D.2. |
 | `resolve_resource` | Translate a resource name (e.g., "customer-database-prod") to actual connection credentials. Agents never see credentials. |
 
 #### Guarantees
 
 - **Credential isolation.** Agents reference resources by name. The Execution Boundary resolves names to credentials at execution time. Agent context never contains API keys, connection strings, passwords, or tokens. A compromised agent (through prompt injection or any other vector) cannot leak credentials because it never had them.
-- **Attenuation enforcement.** When the Policy Gate returns ATTENUATE, the Execution Boundary enforces the modification. If the policy says "read-only," the Execution Boundary ensures the connection is actually read-only, rather than relying on the agent's promise to only read.
+- **Attenuation enforcement.** When the Policy Gate returns ATTENUATE, the Execution Boundary enforces the modification. The boundary executes only validated clamped parameters and records both original and executed values. It MUST NOT execute original parameters on an ATTENUATE decision.
 - **Result capture.** Every execution result is captured and forwarded to the Audit Ledger, including errors and timeouts.
 - **No direct agent access.** If an agent can reach a tool or API without passing through the Execution Boundary, the specification's guarantees are void. The Execution Boundary is a mandatory chokepoint, not an optional proxy.
 
@@ -694,7 +694,7 @@ Controlling what agents do through tool calls is necessary but not sufficient. A
 
 The Output Evaluator performs **scope alignment checking**, not content filtering. Content filters (toxicity, PII, brand safety) are orthogonal and can be layered separately. The Output Evaluator asks: **is this output consistent with what this agent was authorized and assigned to do?**
 
-An email-drafting agent producing a financial analysis is out of scope regardless of whether the content is "safe." A research agent producing action recommendations when it was authorized only to produce summaries is out of scope. Scope alignment catches drift at the output level, complementing action-level scope enforcement in the Policy Gate.
+The architectural goal is to detect outputs beyond the delegated task. The D.8 reference methods perform lexical checks only: they cannot establish semantic scope, correctness, or intent. High-risk output release therefore requires a separate authenticated review bound to the exact output and task. A high lexical score is not evidence of semantic alignment.
 
 #### Evaluation Request
 
@@ -716,7 +716,9 @@ OutputEvaluationRequest {
 ```
 OutputEvaluationResponse {
     decision:           RELEASE | SUPPRESS | ESCALATE | REVISE
-    scope_alignment:    float               // 0.0 to 1.0
+    scope_alignment:    float               // Lexical score, not semantic assurance
+    assessment_scope:   "lexical_only"       // Reference evaluator
+    semantic_assurance: false
     findings:           Finding[]           // Specific scope violations or concerns
     audience_risk:      RiskLevel           // LOW | MEDIUM | HIGH | CRITICAL
 }
@@ -751,7 +753,7 @@ The policy for which outputs require synchronous vs. asynchronous evaluation is 
 
 **Responsibility:** Measures and manages dynamic, capability-scoped trust for agent types. Trust determines the **scrutiny level** applied to actions within an agent's existing authority, controlling how much evaluation is required rather than what is permitted.
 
-**Critical distinction: Trust never creates authority.** An agent with HIGH trust in `data_read` cannot read data that its authority scope does not include. Trust only affects whether an allowed action resolves quickly at Tier 1 or requires deeper evaluation at Tier 2-3. Authority (defined by the Authority Registry) determines what an agent MAY do. Trust (measured by the Trust Engine) determines how much scrutiny is applied to actions within that authority. These are separate mechanisms and MUST NOT be conflated in implementation.
+**Critical distinction: Trust never creates authority.** An agent with HIGH trust in `data_read` cannot read data that its authority scope does not include. Trust affects scrutiny routing after authority and parameter checks; it never skips those checks. Authority (defined by the Authority Registry) determines what an agent MAY do. Trust (measured by the Trust Engine) determines how much scrutiny is applied to actions within that authority. These are separate mechanisms and MUST NOT be conflated in implementation.
 
 #### Trust Model
 
@@ -792,12 +794,15 @@ The specification defines four trust tiers. Implementations may add intermediate
 
 Trust is adjusted based on observed outcomes, not agent self-reporting. The Trust Engine reads from the Audit Ledger and evaluates:
 
-- Successful actions within scope → gradual trust increase for that capability class.
-- Denied actions (agent attempted something outside scope) → trust decrease for that capability class.
-- Escalated actions resolved as "approve" → minor trust increase.
-- Escalated actions resolved as "deny" → trust decrease.
-- Incidents (actions that caused measurable harm) → significant trust decrease, potentially across capability classes.
+- ALLOW, DENY, ESCALATE, and ATTENUATE decisions do not change trust.
+- Independently verified successful outcomes increase trust gradually.
+- Independently verified failed outcomes decrease trust.
+- Verified tampering places the agent/capability in persistent quarantine.
 
+D.6 defines evidence binding, replay protection, and score updates. Appropriate
+escalation is not a failure. Evidence must come from an authenticated observer,
+not the agent. Inactivity never repairs adverse evidence. Scores are heuristic
+routing inputs and require deployment-specific calibration.
 Trust adjustment is always asynchronous. It never blocks the action path.
 
 #### Delegation Trust Attenuation
@@ -812,7 +817,7 @@ Trust never increases through delegation. A parent with MEDIUM data_write trust 
 
 Trust at low-stakes capability classes does not transfer to high-stakes capability classes. An agent that performs thousands of successful data reads does not earn elevated trust for data writes or external communications. Each capability class has an independent trust trajectory.
 
-This prevents the marketplace fraud pattern: building a perfect track record on safe operations to exploit elevated trust for a high-impact action.
+Capability separation reduces cross-capability trust farming. It does not prevent easy-task farming within a capability; outcome criteria and fixed review requirements for high-impact actions remain necessary.
 
 #### Guarantees
 
@@ -1127,7 +1132,7 @@ The Audit Ledger is append-only and cryptographically chained using an approved 
 
 If the Policy Gate cannot reach the Authority Registry, or if the Execution Boundary cannot reach the Policy Gate, the default is DENY. Agents stop. Unauthorized action is worse than no action.
 
-Implementations MAY define risk-class-specific overrides for low-risk actions (e.g., read-only queries to non-sensitive data may fail-open during brief governance outages). These overrides MUST be documented in the authority grant and recorded in the Audit Ledger.
+Core implementations MUST NOT fail open. An operator choosing an availability override operates outside Core conformance for those actions and MUST label that limitation explicitly.
 
 ### Guarantee 9: Authority Expires
 
