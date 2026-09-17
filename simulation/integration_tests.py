@@ -6,8 +6,8 @@ stack: delegation with cascade termination, escalation lifecycle,
 authority expiration, rate limits, damage budgets, escalation timeout,
 and event schema validation.
 
-The GovernanceStack defined here is the minimal conformance-tested
-implementation. It delegates all algorithmic decisions to the canonical
+The GovernanceStack defined here is an in-memory behavioral test fixture,
+not a complete production-conforming implementation. It delegates all algorithmic decisions to the canonical
 functions in reference_algorithms.py. demo.py is a separate illustrative
 walkthrough and is not used by this harness.
 
@@ -15,6 +15,7 @@ Run: python3 simulation/integration_tests.py
 """
 
 import json
+from copy import deepcopy
 import sys
 import uuid
 from datetime import datetime, timedelta
@@ -24,7 +25,7 @@ from typing import Optional
 
 from reference_algorithms import (
     matches, evaluate_rules, evaluate_constraint, is_subset,
-    actions_are_subset, check_rate_limit_sliding,
+    actions_are_subset, rules_are_subset, validate_action_pattern, check_rate_limit_sliding,
     create_genesis, append_to_chain, verify_chain,
 )
 
@@ -61,7 +62,7 @@ class Grant:
         return self.granted_at + timedelta(seconds=self.ttl_seconds)
 
     def is_expired(self, now=None):
-        return (now or datetime.now()) > self.expires_at
+        return (now or datetime.now()) >= self.expires_at
 
     def is_active(self, now=None):
         return not self.terminated and not self.is_expired(now)
@@ -105,9 +106,16 @@ class GovernanceStack:
 
     def create_grant(self, agent_type: str, scope: dict, rules: list[dict],
                      ttl_seconds: int, granted_by: str, **kwargs) -> Grant:
+        if ttl_seconds <= 0 or not granted_by:
+            raise ValueError("A named grantor and positive TTL are required")
+        for rule in rules:
+            validate_action_pattern(rule)
+        declared = scope.get("authorized_actions", [])
+        if not (rules_are_subset(rules, declared) and rules_are_subset(declared, rules)):
+            raise ValueError("Execution rules must match declared authority")
         grant = Grant(
             grant_id=f"grant-{uuid.uuid4().hex[:8]}",
-            agent_type=agent_type, scope=scope, rules=rules,
+            agent_type=agent_type, scope=deepcopy(scope), rules=deepcopy(rules),
             ttl_seconds=ttl_seconds, granted_by=granted_by,
             granted_at=self.now, **kwargs,
         )
@@ -140,11 +148,13 @@ class GovernanceStack:
     # ── Identity Service (uses canonical is_subset) ──
 
     def create_root_identity(self, grant: Grant) -> Identity:
+        if not grant.is_active(self.now):
+            raise ValueError("Cannot create identity from inactive authority")
         iid = f"agent-{uuid.uuid4().hex[:8]}"
         identity = Identity(
             instance_id=iid, agent_type=grant.agent_type,
             parent_id=None, lineage_chain=[iid],
-            scope=grant.scope, rules=grant.rules,
+            scope=deepcopy(grant.scope), rules=deepcopy(grant.rules),
             grant_id=grant.grant_id, created_at=self.now,
             expires_at=grant.expires_at,
         )
@@ -156,6 +166,11 @@ class GovernanceStack:
     def create_child_identity(self, parent: Identity, child_type: str,
                               child_scope: dict,
                               child_rules: list[dict]) -> tuple[Optional[Identity], Optional[str]]:
+        grant = self.grants.get(parent.grant_id)
+        if (not grant or not grant.is_active(self.now) or
+                any(self.identities[i].terminated or self.now >= self.identities[i].expires_at
+                    for i in parent.lineage_chain)):
+            return None, "AUTHORITY_EXPIRED"
         # Check parent can delegate
         parent_deleg = parent.scope.get("delegation", {})
         if not parent_deleg.get("can_delegate", False):
@@ -165,7 +180,7 @@ class GovernanceStack:
 
         # Check delegation depth
         max_depth = parent_deleg.get("max_depth", 0)
-        if len(parent.lineage_chain) > max_depth:
+        if max_depth <= 0:
             self._audit("ActionDenied", parent.instance_id, agent_type=parent.agent_type,
                          detail=f"Delegation depth {len(parent.lineage_chain)} exceeds max {max_depth}",
                          reason="DELEGATION_DEPTH_EXCEEDED")
@@ -178,7 +193,11 @@ class GovernanceStack:
         else:
             parent_scope_for_check = parent.scope
 
-        if not is_subset(child_scope, parent_scope_for_check):
+        declared = child_scope.get("authorized_actions", [])
+        if not (rules_are_subset(child_rules, declared)
+                and rules_are_subset(declared, child_rules)
+                and is_subset(child_scope, parent.scope)
+                and is_subset(child_scope, parent_scope_for_check)):
             self._audit("ActionDenied", parent.instance_id, agent_type=parent.agent_type,
                          detail="Child scope not subset of delegatable scope (full is_subset check)",
                          reason="DELEGATION_SCOPE_VIOLATION")
@@ -189,7 +208,7 @@ class GovernanceStack:
             instance_id=iid, agent_type=child_type,
             parent_id=parent.instance_id,
             lineage_chain=parent.lineage_chain + [iid],
-            scope=child_scope, rules=child_rules,
+            scope=deepcopy(child_scope), rules=deepcopy(child_rules),
             grant_id=parent.grant_id, created_at=self.now,
             expires_at=min(parent.expires_at, self.now + timedelta(hours=1)),
         )
@@ -232,7 +251,7 @@ class GovernanceStack:
                          action=action_type, reason=reason)
             return "DENY", 1, reason
 
-        if self.now > identity.expires_at:
+        if self.now >= identity.expires_at:
             self._audit("ActionDenied", identity.instance_id,
                          agent_type=identity.agent_type,
                          action=action_type, reason="IDENTITY_EXPIRED")
@@ -277,6 +296,12 @@ class GovernanceStack:
                                      detail=f"{db['metric']}: {accumulated}+{current_value} > {db['threshold']}")
                         return on_exceed, 2, "DAMAGE_BUDGET_EXCEEDED"
 
+        # Global constraints are authority bounds, not advisory metadata.
+        if not all(evaluate_constraint(c["field"], c["operator"], c["value"], params)
+                   for c in identity.scope.get("parameter_constraints", [])):
+            self._audit("ActionDenied", identity.instance_id, action=action_type,
+                        reason="CONSTRAINT_VIOLATION")
+            return "DENY", 2, "CONSTRAINT_VIOLATION"
         # Evaluate against rules (Appendix D.2)
         decision, tier, reason = evaluate_rules(identity.rules, action_type, params)
         self._audit("ActionEvaluated", identity.instance_id,
@@ -366,7 +391,9 @@ class GovernanceStack:
         entry = {"entry_id": entry_id, "event_type": event_type,
                  "agent_id": agent_id, "timestamp": self.now, **kwargs}
         self.audit.append(entry)
-        append_to_chain(self.chain, "SHA256", self.genesis, entry_id, event_type, agent_id)
+        payload = {"timestamp": self.now.isoformat(), **kwargs}
+        append_to_chain(self.chain, "SHA256", self.genesis, entry_id, event_type, agent_id,
+                        **payload)
 
 
 def _resolve_dot(path: str, obj: dict):
@@ -436,14 +463,14 @@ def run_integration_tests():
     ]
 
     research_scope = {
-        "authorized_actions": [{"pattern": p["pattern"]} for p in research_rules],
+        "authorized_actions": deepcopy(research_rules),
         "delegation": {
             "can_delegate": True,
             "max_depth": 2,
             "delegatable_scope": {
                 "authorized_actions": [
-                    {"pattern": "database.query"},
-                    {"pattern": "api.external.get"},
+                    {"pattern": "database.query", "decision": "ALLOW"},
+                    {"pattern": "api.external.get", "decision": "ALLOW"},
                 ],
                 "parameter_constraints": [],
                 "resource_constraints": [],
@@ -466,7 +493,7 @@ def run_integration_tests():
         {"pattern": "api.external.get", "decision": "ALLOW", "constraints": []},
     ]
     child_scope = {
-        "authorized_actions": [{"pattern": "database.query"}, {"pattern": "api.external.get"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}, {"pattern": "api.external.get", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -478,7 +505,7 @@ def run_integration_tests():
     # DL-002: Child requesting action not in delegatable scope
     bad_rules = [{"pattern": "database.write", "decision": "ALLOW", "constraints": []}]
     bad_scope = {
-        "authorized_actions": [{"pattern": "database.write"}],
+        "authorized_actions": [{"pattern": "database.write", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -489,7 +516,7 @@ def run_integration_tests():
 
     # DL-002b: Child with extra output types (tests full is_subset step 5)
     extra_output_scope = {
-        "authorized_actions": [{"pattern": "database.query"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": ["INTERNAL_SUMMARY", "CUSTOMER_FACING"]},
@@ -502,11 +529,11 @@ def run_integration_tests():
     # DL-003: Delegation depth exceeded
     gov2 = GovernanceStack()
     shallow_scope = {
-        "authorized_actions": [{"pattern": p["pattern"]} for p in research_rules],
+        "authorized_actions": deepcopy(research_rules),
         "delegation": {
             "can_delegate": True, "max_depth": 1,
             "delegatable_scope": {
-                "authorized_actions": [{"pattern": "database.query"}],
+                "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
                 "parameter_constraints": [], "resource_constraints": [],
                 "delegation": {"can_delegate": True, "max_depth": 0},
                 "output_policy": {"authorized_output_types": []},
@@ -517,9 +544,9 @@ def run_integration_tests():
     }
     depth_child_rules = [{"pattern": "database.query", "decision": "ALLOW", "constraints": []}]
     depth_child_scope = {
-        "authorized_actions": [{"pattern": "database.query"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
         "delegation": {"can_delegate": True, "max_depth": 0,
-                        "delegatable_scope": {"authorized_actions": [{"pattern": "database.query"}],
+                        "delegatable_scope": {"authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
                                                "parameter_constraints": [], "resource_constraints": [],
                                                "delegation": {"can_delegate": False, "max_depth": 0},
                                                "output_policy": {"authorized_output_types": []}}},
@@ -534,7 +561,7 @@ def run_integration_tests():
           c2 is not None and err2 is None, f"err={err2}")
 
     gc_scope = {
-        "authorized_actions": [{"pattern": "database.query"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -546,7 +573,7 @@ def run_integration_tests():
     # DL-004: Parent without delegation rights
     gov3 = GovernanceStack()
     no_deleg_scope = {
-        "authorized_actions": [{"pattern": p["pattern"]} for p in research_rules],
+        "authorized_actions": deepcopy(research_rules),
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -576,7 +603,7 @@ def run_integration_tests():
     gov_rl = GovernanceStack()
     rl_rules = [{"pattern": "api.call", "decision": "ALLOW", "constraints": []}]
     rl_scope = {
-        "authorized_actions": [{"pattern": "api.call"}],
+        "authorized_actions": [{"pattern": "api.call", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -605,7 +632,7 @@ def run_integration_tests():
     gov_db = GovernanceStack()
     db_rules = [{"pattern": "payment.send", "decision": "ALLOW", "constraints": []}]
     db_scope = {
-        "authorized_actions": [{"pattern": "payment.send"}],
+        "authorized_actions": [{"pattern": "payment.send", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -645,7 +672,7 @@ def run_integration_tests():
         {"pattern": "gmail.messages.send", "decision": "ESCALATE", "constraints": []},
     ]
     email_scope = {
-        "authorized_actions": [{"pattern": "gmail.threads.get"}, {"pattern": "gmail.messages.send"}],
+        "authorized_actions": deepcopy(email_rules),
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -718,7 +745,7 @@ def run_integration_tests():
         {"pattern": "database.write_bulk", "decision": "ESCALATE", "constraints": []},
     ]
     write_scope = {
-        "authorized_actions": [{"pattern": "database.write"}, {"pattern": "database.write_bulk"}],
+        "authorized_actions": deepcopy(write_rules),
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -792,7 +819,6 @@ def run_integration_tests():
                 event_schema["$id"]: event_schema,
                 types_schema["$id"]: types_schema,
             }
-            resolver = jsonschema.RefResolver.from_schema(event_schema, store=schema_store)
 
             # Validate that core event types referenced in the schema are structurally sound
             event_defs = event_schema.get("$defs", {})

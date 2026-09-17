@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Agent Governance Specification \u2014 Conformance Test Vectors",
   "description": "Test cases that conforming implementations MUST produce identical results for. Each test defines an input (agent identity, action, parameters) and expected output (decision, tier, reason code).",
-  "version": "0.5.0-draft",
+  "version": "0.7.0-draft",
   "test_suites": [
     {
       "suite": "pattern_matching",
@@ -716,6 +716,412 @@
           "candidate_rule_approver": "human:alice@org",
           "expected": "rejected",
           "note": "Same person cannot propose and approve"
+        }
+      ]
+    },
+    {
+      "suite": "delegation_semantics",
+      "description": "D.3 effective first-match authority, not pattern coverage alone",
+      "tests": [
+        {
+          "id": "DS-001",
+          "description": "deny_to_allow",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "DENY",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-002",
+          "description": "cap_removed",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 100
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-003",
+          "description": "cap_tightened",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 50
+                  }
+                ]
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 100
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": true
+        },
+        {
+          "id": "DS-004",
+          "description": "cap_loosened",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 101
+                  }
+                ]
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 100
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-005",
+          "description": "deny_exception_removed",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.transfer",
+                "decision": "DENY",
+                "constraints": []
+              },
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-006",
+          "description": "deny_exception_preserved",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.transfer",
+                "decision": "DENY",
+                "constraints": []
+              },
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.transfer",
+                "decision": "DENY",
+                "constraints": []
+              },
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": true
+        },
+        {
+          "id": "DS-007",
+          "description": "shadowed_deny",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              },
+              {
+                "pattern": "payment.transfer",
+                "decision": "DENY",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.transfer",
+                "decision": "DENY",
+                "constraints": []
+              },
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-008",
+          "description": "escalation_removed",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ESCALATE",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-009",
+          "description": "failure_allow_added",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 100
+                  }
+                ],
+                "on_constraint_fail": "ALLOW"
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "LESS_THAN_OR_EQUAL",
+                    "value": 100
+                  }
+                ],
+                "on_constraint_fail": "DENY"
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-010",
+          "description": "narrow_safe_branch",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.read",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.transfer",
+                "decision": "DENY",
+                "constraints": []
+              },
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": true
+        },
+        {
+          "id": "DS-011",
+          "description": "namespace_sibling",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payments.transfer",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-012",
+          "description": "missing_decision",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*"
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-013",
+          "description": "identity_variable",
+          "child_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "EQUALS",
+                    "value": "${agent.instance_id}"
+                  }
+                ]
+              }
+            ]
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": [
+                  {
+                    "field": "amount",
+                    "operator": "EQUALS",
+                    "value": "${agent.instance_id}"
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": false
+        },
+        {
+          "id": "DS-014",
+          "description": "default_deny",
+          "child_scope": {
+            "authorized_actions": []
+          },
+          "parent_scope": {
+            "authorized_actions": [
+              {
+                "pattern": "payment.*",
+                "decision": "ALLOW",
+                "constraints": []
+              }
+            ]
+          },
+          "expected": true
         }
       ]
     }
