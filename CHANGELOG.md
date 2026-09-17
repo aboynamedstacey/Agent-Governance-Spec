@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0-draft (2026-09-17)
+
+Security and evidence hardening; see issue #1.
+
+- D.3 now compares effective first-match decisions and per-rule constraints,
+  including deny exceptions and failure branches. Identity creation binds
+  execution rules to validated scope and checks both live and delegatable authority.
+- Resource operations no longer form an implicit privilege ladder. Output controls
+  cannot silently disappear. Identity-relative variables must be bound before delegation.
+- D.6 replaces permission-based rewards with verified outcome evidence, replay
+  protection, neutral escalation, and persistent tamper quarantine. These are
+  breaking Extension API/behavior changes; prior scores require explicit migration.
+- D.7 requires trusted authority confirmation and tool-effect metadata; it does not
+  infer read-only effects from names or silently transform writes into reads.
+- D.8 labels lexical evidence limits and provides a fail-closed delivery gate.
+- Added evidence and assessment schemas, adversarial conformance vectors, local
+  SQLite execution proof, regression tests, and a reproducible verification workflow.
+- Integration audit chains now cover decision payloads rather than identifiers alone.
+- Audit serialization uses RFC 8785 for numeric normalization and UTF-16 key ordering;
+  added regression vectors for cases sorted Python JSON does not canonicalize correctly.
+
+Migration: declare decisions on every action rule; preserve rule order and caps;
+use identical validated execution policies; supply authenticated outcome evidence
+for score changes; classify tool effects and output risk outside the agent.
+
+
 ## 0.6.0-draft (2026-06-08)
 
 Refactor of the identity layer toward consuming external agent-identity standards rather than defining everything in-house.
