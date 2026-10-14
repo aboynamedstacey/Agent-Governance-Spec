@@ -4,6 +4,17 @@
 
 Security and evidence hardening; see issue #1.
 
+**Escalation hardening (2026-10-14).** Pending reviews now enforce one-time
+resolution, deadlines, live grant and ancestor state, policy snapshots, and a
+full authorization check for modified actions. Human approval alone does not
+mark an action as executed or grant tool credentials. A constraint-failure
+escalation cannot be approved as if it were an explicit ESCALATE rule.
+Twelve regressions cover revocation, terminated ancestors, expiry and timeout,
+repeated approval, rule changes, modified-action constraints, and audit integrity.
+The Execution Boundary remains responsible for authenticating reviewers and
+atomically consuming bound approvals before external side effects.
+
+
 - D.3 now compares effective first-match decisions and per-rule constraints,
   including deny exceptions and failure branches. Identity creation binds
   execution rules to validated scope and checks both live and delegatable authority.
