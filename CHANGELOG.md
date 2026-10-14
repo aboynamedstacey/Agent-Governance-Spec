@@ -10,7 +10,9 @@
   rolling windows, and capped diagnostic action-log retention at 256 entries.
 - Content-addressed policy snapshots now appear once per digest in the local
   audit chain. Subsequent action requests carry a digest reference.
-- Added adversarial regression tests and a reproducible Python/SQLite benchmark.
+- Added 13 adversarial regression tests, including cross-grant TYPE and
+  ancestor/descendant DELEGATION_TREE rate limits, and a reproducible
+  Python/SQLite benchmark.
 - Defined measurable deployment targets, storage guidance, and limitations in
   docs/performance-profile.md. The optimized fixture is not a durable,
   concurrency-safe authorization or audit service.
