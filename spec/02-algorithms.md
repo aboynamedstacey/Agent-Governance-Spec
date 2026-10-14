@@ -319,7 +319,7 @@ function check_rate_limit_fixed(agent_id, action_type, rate_limit, action_log) -
 |---|---|
 | INSTANCE | This specific agent instance |
 | TYPE | All active instances of this agent type |
-| DELEGATION_TREE | This agent and all agents in its delegation tree (ancestors + descendants) |
+| DELEGATION_TREE | All agents sharing the same root identity in a delegation tree, including sibling branches; separate root identities do not share a tree counter |
 
 ---
 

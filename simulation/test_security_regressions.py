@@ -331,6 +331,9 @@ class WorkflowTests(unittest.TestCase):
         entry = next(e for e in self.gov.chain if e["event_type"] == "ActionEvaluated")
         entry["decision"] = "DENY"
         self.assertFalse(verify_chain(self.gov.chain, "SHA256", self.gov.genesis)[0])
+        # The deep scan runs off-path; once it flags a history change the
+        # incremental guard remains quarantined for all subsequent requests.
+        self.assertFalse(self.boundary.verify_audit_full())
         self.assertEqual(self.boundary.execute(self.root.instance_id, "mail.draft", self.params)["reason"], "audit_integrity")
         self.assertEqual(self.boundary.counts()["drafts"], 1)
 
@@ -342,7 +345,11 @@ class WorkflowTests(unittest.TestCase):
         request = by_id[decision["causal_parent"]]
         self.assertEqual(request["granted_by"], "human")
         self.assertEqual(request["grant_id"], self.grant.grant_id)
-        self.assertIn("policy_snapshot", request)
+        policy = next(e for e in self.gov.chain
+                      if e["event_type"] == "PolicySnapshotStored" and
+                      e["policy_digest"] == request["policy_digest"])
+        self.assertEqual(policy["policy_digest"], request["policy_digest"])
+        self.assertIn("authorized_actions", policy["policy_snapshot"])
         self.assertEqual(request["params"], self.params)
 
     def test_bool_does_not_pass_numeric_tool_contract(self):
@@ -352,6 +359,222 @@ class WorkflowTests(unittest.TestCase):
         self.boundary.available = False
         self.assertEqual(self.boundary.execute(self.root.instance_id, "mail.draft", self.params)["decision"], "DENY")
         self.assertEqual(self.boundary.counts()["drafts"], 0)
+
+
+
+class FastPathOptimizationTests(unittest.TestCase):
+    def setUp(self):
+        self.gov = GovernanceStack()
+        self.scope = draft_scope(True)
+        self.grant = self.gov.create_grant("indexed", self.scope,
+                                          self.scope["authorized_actions"], 3600,
+                                          "human")
+        self.root = self.gov.create_root_identity(self.grant)
+        self.params = {"body": "sample", "recipients": 1}
+
+    def test_rate_limit_uses_rolling_window(self):
+        self.grant.rate_limits = [{"action_pattern": "mail.draft",
+                                   "max_count": 2, "window": "60s",
+                                   "scope": "INSTANCE"}]
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.gov.advance_time(seconds=10)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+        self.gov.advance_time(seconds=51)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+
+    def test_budget_uses_rolling_total(self):
+        self.grant.damage_budgets = [{
+            "metric": "recipients", "accumulator": "recipients",
+            "threshold": 3, "window": "60s", "scope": "INSTANCE",
+            "on_exceed": "DENY", "evaluation_tier": 2}]
+        for _ in range(3):
+            self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
+                         "DAMAGE_BUDGET_EXCEEDED")
+        self.gov.advance_time(seconds=61)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+
+    def test_negative_and_nonnumeric_budget_fail_closed(self):
+        self.grant.damage_budgets = [{
+            "metric": "count", "accumulator": "amount",
+            "threshold": 10, "window": "60s", "scope": "INSTANCE",
+            "on_exceed": "ESCALATE", "evaluation_tier": 2}]
+        for value in (-1, True, "5", float("nan"), float("inf")):
+            self.assertEqual(self.gov.evaluate(
+                self.root, "mail.draft", dict(self.params, amount=value))[0], "DENY")
+
+    def test_type_rate_counter_separates_agent_types(self):
+        self.grant.rate_limits = [{
+            "action_pattern": "mail.draft", "max_count": 1,
+            "window": "1h", "scope": "TYPE", "agent_type": "indexed"}]
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        other = self.gov.create_root_identity(self.grant)
+        self.assertEqual(self.gov.evaluate(other, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+
+    def test_delegation_tree_counters_include_descendants(self):
+        self.grant.rate_limits = [{
+            "action_pattern": "mail.draft", "max_count": 1,
+            "window": "1h", "scope": "DELEGATION_TREE"}]
+        child_scope = draft_scope()
+        child, error = self.gov.create_child_identity(
+            self.root, "helper", child_scope, child_scope["authorized_actions"])
+        self.assertIsNone(error)
+        self.assertEqual(self.gov.evaluate(child, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+
+    def test_type_limit_counts_other_grants_of_same_agent_type(self):
+        rules = [{"action_pattern": "mail.draft", "max_count": 1,
+                  "window": "60s", "scope": "TYPE", "agent_type": "indexed"}]
+        limited = self.gov.create_grant(
+            "indexed", self.scope, self.scope["authorized_actions"], 3600,
+            "human", rate_limits=rules)
+        limited_agent = self.gov.create_root_identity(limited)
+        # This other grant has no TYPE limit, but its actions still count.
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(
+            self.gov.evaluate(limited_agent, "mail.draft", self.params)[2],
+            "RATE_LIMIT_EXCEEDED")
+
+    def test_type_limit_excludes_other_agent_type(self):
+        rules = [{"action_pattern": "mail.draft", "max_count": 1,
+                  "window": "60s", "scope": "TYPE", "agent_type": "indexed"}]
+        limited = self.gov.create_grant(
+            "indexed", self.scope, self.scope["authorized_actions"], 3600,
+            "human", rate_limits=rules)
+        limited_agent = self.gov.create_root_identity(limited)
+        different = self.gov.create_grant(
+            "other-type", self.scope, self.scope["authorized_actions"], 3600, "human")
+        different_agent = self.gov.create_root_identity(different)
+        self.assertEqual(self.gov.evaluate(different_agent, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(limited_agent, "mail.draft", self.params)[0], "ALLOW")
+
+    def test_delegation_tree_counts_entire_tree_including_siblings(self):
+        self.grant.rate_limits = [{
+            "action_pattern": "mail.draft", "max_count": 3,
+            "window": "1h", "scope": "DELEGATION_TREE"}]
+        child_scope = draft_scope()
+        first, error = self.gov.create_child_identity(
+            self.root, "helper", child_scope, child_scope["authorized_actions"])
+        self.assertIsNone(error)
+        sibling, error = self.gov.create_child_identity(
+            self.root, "helper", child_scope, child_scope["authorized_actions"])
+        self.assertIsNone(error)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(sibling, "mail.draft", self.params)[0], "ALLOW")
+        # An action from any sibling consumes the shared delegation-tree limit.
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+
+    def test_type_rate_rule_without_non_schema_type_hint(self):
+        type_limit = [{"action_pattern": "mail.draft", "max_count": 1,
+                       "window": "1h", "scope": "TYPE"}]
+        grant = self.gov.create_grant(
+            "indexed", self.scope, self.scope["authorized_actions"], 3600,
+            "human", rate_limits=type_limit)
+        agent = self.gov.create_root_identity(grant)
+        self.assertEqual(self.gov.evaluate(agent, "mail.draft", self.params)[0], "ALLOW")
+        second = self.gov.create_root_identity(grant)
+        self.assertEqual(self.gov.evaluate(second, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+
+    def test_budget_type_shared_across_instances(self):
+        self.grant.damage_budgets = [{
+            "metric": "recipients", "accumulator": "recipients", "threshold": 1,
+            "window": "1h", "scope": "TYPE", "on_exceed": "DENY",
+            "evaluation_tier": 2}]
+        another = self.gov.create_root_identity(self.grant)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(another, "mail.draft", self.params)[2],
+                         "DAMAGE_BUDGET_EXCEEDED")
+
+    def test_budget_tree_shared_across_siblings(self):
+        self.grant.damage_budgets = [{
+            "metric": "recipients", "accumulator": "recipients", "threshold": 1,
+            "window": "1h", "scope": "DELEGATION_TREE", "on_exceed": "DENY",
+            "evaluation_tier": 2}]
+        scope = draft_scope()
+        first, error = self.gov.create_child_identity(
+            self.root, "helper", scope, scope["authorized_actions"])
+        self.assertIsNone(error)
+        other, error = self.gov.create_child_identity(
+            self.root, "helper", scope, scope["authorized_actions"])
+        self.assertIsNone(error)
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(other, "mail.draft", self.params)[2],
+                         "DAMAGE_BUDGET_EXCEEDED")
+
+    def test_usage_history_stays_bounded(self):
+        for n in range(350):
+            self.gov.evaluate(self.root, "mail.draft", self.params)
+        self.assertEqual(len(self.gov.action_log), 256)
+        self.assertEqual(len(self.gov.usage.rate_windows), 0)
+
+    def test_tail_guard_does_not_call_full_scan(self):
+        with TemporaryDirectory() as directory:
+            boundary = LocalExecutionBoundary(self.gov, Path(directory) / "tools.db")
+            try:
+                with patch("audit_head.verify_chain",
+                           side_effect=AssertionError("Full scan on hot path")):
+                    for _ in range(5):
+                        self.assertEqual(
+                            boundary.execute(self.root.instance_id, "mail.draft",
+                                             self.params)["decision"], "ALLOW")
+                self.assertTrue(boundary.verify_audit_full())
+            finally:
+                boundary.close()
+
+    def test_latest_tail_tamper_denied_without_full_scan(self):
+        with TemporaryDirectory() as directory:
+            boundary = LocalExecutionBoundary(self.gov, Path(directory) / "tools.db")
+            try:
+                self.assertEqual(boundary.execute(
+                    self.root.instance_id, "mail.draft", self.params)["decision"], "ALLOW")
+                # A forged newest entry differs from its authenticated digest.
+                self.gov.chain[-1]["outcome"] = "failure"
+                self.assertEqual(boundary.execute(
+                    self.root.instance_id, "mail.draft", self.params)["reason"],
+                    "audit_integrity")
+                self.assertEqual(boundary.counts()["drafts"], 1)
+            finally:
+                boundary.close()
+
+    def test_full_verification_detects_older_tampering(self):
+        with TemporaryDirectory() as directory:
+            boundary = LocalExecutionBoundary(self.gov, Path(directory) / "tools.db")
+            try:
+                for _ in range(3):
+                    self.assertEqual(boundary.execute(
+                        self.root.instance_id, "mail.draft", self.params)["decision"], "ALLOW")
+                self.assertTrue(boundary.audit_guard.check_incremental())
+                self.gov.chain[0]["agent_id"] = "tampered"
+                # A historical mutation outside the last segment requires the
+                # scheduled deep verifier, not an O(1) tail inspection.
+                self.assertFalse(boundary.verify_audit_full())
+                self.assertEqual(boundary.execute(
+                    self.root.instance_id, "mail.draft", self.params)["reason"],
+                    "audit_integrity")
+            finally:
+                boundary.close()
+
+    def test_truncated_audit_denied(self):
+        with TemporaryDirectory() as directory:
+            boundary = LocalExecutionBoundary(self.gov, Path(directory) / "tools.db")
+            try:
+                boundary.execute(self.root.instance_id, "mail.draft", self.params)
+                self.assertTrue(boundary.audit_guard.check_incremental())
+                self.gov.chain.pop()
+                self.assertEqual(boundary.execute(
+                    self.root.instance_id, "mail.draft", self.params)["reason"],
+                    "audit_integrity")
+            finally:
+                boundary.close()
 
 
 class ContractTests(unittest.TestCase):

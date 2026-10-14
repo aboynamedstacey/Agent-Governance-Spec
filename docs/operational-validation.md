@@ -22,6 +22,11 @@ Approval is an audit-recorded review outcome, not a tool execution. This fixture
 intentionally cannot execute an approved escalation without a separate trusted
 execution adapter.
 
+The local test fixture now uses indexed rolling counters and checks only the
+unverified audit tail on the routine path. Deep chain verification is an explicit
+maintenance operation. Full integrity, persistence, and cross-worker concurrency
+are not established by this optimization. See [performance profile](performance-profile.md).
+
 ## First deployment acceptance criteria
 
 1. Put a real agent runtime in a separate trust zone. Route its entire tool

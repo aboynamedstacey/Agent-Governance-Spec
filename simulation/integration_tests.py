@@ -15,6 +15,8 @@ Run: python3 simulation/integration_tests.py
 """
 
 import json
+import math
+from collections import deque
 from copy import deepcopy
 import sys
 import uuid
@@ -25,9 +27,10 @@ from typing import Optional
 
 from reference_algorithms import (
     matches, evaluate_rules, evaluate_constraint, is_subset,
-    actions_are_subset, rules_are_subset, validate_action_pattern, check_rate_limit_sliding,
+    actions_are_subset, rules_are_subset, validate_action_pattern,
     create_genesis, append_to_chain, verify_chain,
 )
+from usage_index import RollingUsageIndex
 
 # Optional: jsonschema for event validation
 try:
@@ -90,7 +93,8 @@ class GovernanceStack:
         self.grants: dict[str, Grant] = {}
         self.identities: dict[str, Identity] = {}
         self.audit: list[dict] = []
-        self.action_log: list[dict] = []  # For rate limit tracking
+        self.action_log = deque(maxlen=256)  # Bounded diagnostic sample only
+        self.usage = RollingUsageIndex()
         self.escalation_queue: list[dict] = []
         self.genesis = create_genesis("SHA256", "system", "test-chain")
         self.chain: list[dict] = []
@@ -120,6 +124,7 @@ class GovernanceStack:
             granted_at=self.now, **kwargs,
         )
         self.grants[grant.grant_id] = grant
+        self.usage.register_grant(grant)
         self._audit("AuthorityGrantCreated", "system", agent_type=agent_type,
                      detail=f"By {granted_by}, TTL={ttl_seconds}s")
         return grant
@@ -272,44 +277,38 @@ class GovernanceStack:
                          action=action_type, reason="IDENTITY_EXPIRED")
             return "DENY", 1, "IDENTITY_EXPIRED"
 
-        # Rate limit check (Appendix D.4)
-        for rl in grant.rate_limits:
-            if matches(action_type, rl["action_pattern"]):
-                within_limit = check_rate_limit_sliding(
-                    self.action_log, identity.instance_id,
-                    action_type, rl, self.now
-                )
-                if not within_limit:
-                    self._audit("ActionDenied", identity.instance_id,
-                                 agent_type=identity.agent_type,
-                                 action=action_type, reason="RATE_LIMIT_EXCEEDED",
-                                 detail=f"Exceeds {rl['max_count']}/{rl['window']}")
-                    return "DENY", 1, "RATE_LIMIT_EXCEEDED"
+        # Indexed rolling windows, without scanning historical action logs.
+        for index, rl in enumerate(grant.rate_limits):
+            if not matches(action_type, rl["action_pattern"]):
+                continue
+            if (rl.get("scope", "INSTANCE") == "TYPE" and
+                    identity.agent_type != (rl.get("agent_type") or grant.agent_type)):
+                continue
+            if not self.usage.rate_permits(grant, index, rl, identity, self.now):
+                self._audit("ActionDenied", identity.instance_id,
+                             agent_type=identity.agent_type,
+                             action=action_type, reason="RATE_LIMIT_EXCEEDED",
+                             detail=f"Exceeds {rl['max_count']}/{rl['window']}")
+                return "DENY", 1, "RATE_LIMIT_EXCEEDED"
 
-        # Damage budget check (Tier 2)
-        for db in grant.damage_budgets:
-            if db.get("evaluation_tier", 2) == 2:
-                accumulator_field = db["accumulator"]
-                current_value = _resolve_dot(accumulator_field, params)
-                if current_value is not None:
-                    # Sum accumulated value in window
-                    window = _parse_simple_duration(db["window"])
-                    window_start = self.now - window
-                    accumulated = sum(
-                        _resolve_dot(db["accumulator"], e.get("params", {})) or 0
-                        for e in self.action_log
-                        if e.get("agent_id") == identity.instance_id
-                        and e.get("timestamp", datetime.min) >= window_start
-                    )
-                    if accumulated + current_value > db["threshold"]:
-                        on_exceed = db.get("on_exceed", "DENY")
-                        self._audit("ActionDenied" if on_exceed == "DENY" else "ActionEvaluated",
-                                     identity.instance_id, agent_type=identity.agent_type,
-                                     action=action_type,
-                                     reason="DAMAGE_BUDGET_EXCEEDED",
-                                     decision=on_exceed,
-                                     detail=f"{db['metric']}: {accumulated}+{current_value} > {db['threshold']}")
-                        return on_exceed, 2, "DAMAGE_BUDGET_EXCEEDED"
+        for index, db in enumerate(grant.damage_budgets):
+            if db.get("evaluation_tier", 2) != 2:
+                continue
+            permitted, accumulated, amount = self.usage.budget_permits(
+                grant, index, db, identity, params, self.now)
+            if not permitted:
+                reason = ("INVALID_BUDGET_AMOUNT" if
+                          type(amount) not in (int, float) or amount < 0 or
+                          (isinstance(amount, float) and not math.isfinite(amount))
+                          else "DAMAGE_BUDGET_EXCEEDED")
+                on_exceed = db.get("on_exceed", "DENY")
+                if reason == "INVALID_BUDGET_AMOUNT":
+                    on_exceed = "DENY"
+                self._audit("ActionDenied" if on_exceed == "DENY" else "ActionEvaluated",
+                             identity.instance_id, agent_type=identity.agent_type,
+                             action=action_type, reason=reason, decision=on_exceed,
+                             detail=f"{db['metric']}: {accumulated}+{amount} > {db['threshold']}")
+                return on_exceed, 2, reason
 
         # Global constraints are authority bounds, not advisory metadata.
         if not all(evaluate_constraint(c["field"], c["operator"], c["value"], params)
@@ -326,6 +325,7 @@ class GovernanceStack:
 
         # Record in action log for rate limit / damage budget tracking
         if record_action and decision in ("ALLOW", "ATTENUATE"):
+            self.usage.record(grant, identity, action_type, params, self.now)
             self.action_log.append({
                 "agent_id": identity.instance_id,
                 "agent_type": identity.agent_type,
