@@ -282,7 +282,7 @@ class GovernanceStack:
             if not matches(action_type, rl["action_pattern"]):
                 continue
             if (rl.get("scope", "INSTANCE") == "TYPE" and
-                    identity.agent_type != rl.get("agent_type")):
+                    identity.agent_type != (rl.get("agent_type") or grant.agent_type)):
                 continue
             if not self.usage.rate_permits(grant, index, rl, identity, self.now):
                 self._audit("ActionDenied", identity.instance_id,
