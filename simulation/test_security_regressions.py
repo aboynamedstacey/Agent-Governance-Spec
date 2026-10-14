@@ -149,15 +149,17 @@ class EscalationSafetyTests(unittest.TestCase):
         self.assertEqual(self.resolve(escalation_id)["decision"], "DENY")
 
     def test_approval_denied_if_parent_terminated(self):
-        self.root_scope = draft_scope(True)
+        root_scope = deepcopy(self.scope)
+        root_scope["delegation"] = {"can_delegate": True, "max_depth": 1}
         grant = self.gov.create_grant(
-            "root", self.root_scope, self.root_scope["authorized_actions"], 3600, "human")
+            "root", root_scope, root_scope["authorized_actions"], 3600, "human")
         root = self.gov.create_root_identity(grant)
-        child_scope = draft_scope()
+        child_scope = deepcopy(self.scope)
         child, error = self.gov.create_child_identity(
             root, "child", child_scope, child_scope["authorized_actions"])
         self.assertIsNone(error)
-        self.gov.evaluate(child, "mail.draft", {"recipients": 3})
+        self.assertEqual(self.gov.evaluate(
+            child, "mail.draft", {"recipients": 3})[0], "ESCALATE")
         self.assertEqual(self.gov.escalation_queue[-1]["state"], "PENDING")
         root.terminated = True
         entry = self.gov.escalation_queue[-1]
