@@ -877,7 +877,16 @@ EscalationResolution {
 }
 ```
 
-**MODIFY decision:** When a human reviewer selects MODIFY, they provide a `ModifiedAction` that specifies the approved version of the action. By default, the modified action is re-evaluated by the Policy Gate before execution (`requires_reevaluation: true`). This ensures the human's modification still conforms to policy, so that a reviewer cannot use MODIFY to bypass policy constraints.
+**Escalation resolution and execution.** A human resolution is not an execution event or an independent grant of authority. Implementations MUST enforce the following:
+
+1. Only a pending escalation may be resolved. Its original action, parameters, identity, policy version, and creation deadline MUST be immutable. Resolution at or after the deadline MUST apply the timeout outcome. Repeated, concurrent, or late resolutions MUST NOT create additional approvals or side effects.
+2. The reviewer MUST be independently authenticated and authorized for the requested review. A named reviewer and nonempty justification are required, but are not sufficient evidence of authentication.
+3. Before resolution, the agent's authority grant, full ancestor lineage, expiration, and applicable policy MUST be checked again. A revoked or expired grant, terminated ancestor, replaced policy, or policy snapshot mismatch invalidates the pending approval. A human decision cannot override an action that is currently DENY due to scope or parameter constraints.
+4. `APPROVE` MUST apply only to the exact original action and parameters when the current first-match policy explicitly routes the action to `ESCALATE`, and all applicable limits and constraints are satisfied. A budget overflow or a failed constraint that happens to route to `ESCALATE` is not authority to approve the original out-of-bounds action.
+5. `MODIFY` MUST provide the complete modified action and MUST pass the full Policy Gate again, including global and rule-local constraints, resource scope, rate limits, and damage budgets. The result MUST be `ALLOW`. Rechecking only the selected action rule is insufficient. Implementations MUST prevent review loops and MUST NOT count reevaluation as completed execution.
+6. Approval MUST be bound to the exact action, parameter digest, identity, policy version, reviewer, and escalation ID. Only the trusted Execution Boundary may perform the resulting tool call. At execution, it MUST recheck live authority and consume the approval atomically with the execution-intent/idempotency record, under documented revocation and concurrency semantics. Neither an escalation-resolution return value nor an audit event independently authorizes a tool call.
+
+The in-memory reference harness exercises resolution and re-evaluation but does not issue executable approval tokens or perform external side effects. Production adapters must implement the final execution boundary separately.
 
 #### Forced Engagement Design
 
