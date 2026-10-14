@@ -48,7 +48,12 @@ Do not infer performance from the reference Python/SQLite benchmark alone.
 ## Rate and budget accounting
 
 Maintain keyed rolling windows, exact window boundaries, and indexed aggregates,
-not repeated log scans. In production, counters and damage budgets MUST be
+not repeated log scans. TYPE limits must aggregate across all grants with the
+same agent type; DELEGATION_TREE limits count ancestors and descendants without
+including unrelated siblings. New policy activation and raised limits require
+correct counter rehydration or fail-closed behavior.
+
+In production, counters and damage budgets MUST be
 atomically reserved with execution intent before admitting concurrent writes,
 reconciled with confirmed outcomes, and recoverable after restart. A local
 deque is not sufficient in a multi-worker deployment. Sharding must not allow
