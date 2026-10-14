@@ -581,6 +581,13 @@ The specification does not mandate specific latency numbers (these are implement
 - Tier 1 evaluation MUST NOT require network calls. Policy rules are cached locally.
 - Tier 2 evaluation MUST NOT require calls to external systems beyond the policy cache and the action parameters themselves.
 - Tier 3 evaluation MAY query the Trust Engine and recent audit history, but MUST have a timeout. If Tier 3 cannot resolve within the timeout, the action is escalated (not allowed by default).
+- Routine action evaluation MUST NOT perform a history-wide audit-chain verification, scan an unbounded action log, or retrieve full model context. Rate and damage controls MUST use bounded-window or indexed accounting whose lookup cost does not increase with the age of the audit ledger. The reference implementation's original linear scans are not suitable for a deployed execution boundary.
+- Implementations MUST check live effective authority when authorizing consequential actions; a cached identity or policy MUST NOT extend authority beyond expiry, revocation, or a terminated ancestor. When timely revocation information is unavailable, affected actions MUST fail closed. Performance optimization MUST NOT weaken the authorization-to-execution boundary.
+- Append hashing MAY be incremental using a protected prior head. Full integrity verification SHOULD run separately from the routine request path against independently protected checkpoints. A detected discrepancy MUST quarantine the affected chain and block consequential execution pending investigation.
+- Bounded audit queues MAY reduce latency but MUST define backpressure and overflow handling. An unavailable required durable audit sink MUST cause consequential writes to be denied, not silently dropped. Audit-intent durability and idempotent execution semantics remain required where specified in Section 3.4 and Section 3.8.
+- Implementations SHOULD store immutable policy and large context snapshots once by content digest and reference them from action records. They MUST preserve reconstruction, integrity, and retention guarantees; a digest without a retrievable authenticated payload is insufficient.
+
+An optional implementation performance profile with measurement protocol, deployment guardrails, and initial p95/p99 targets is defined in [Performance and storage profile](../docs/performance-profile.md). These targets are not measurements of this repository or additional Core guarantees.
 
 ---
 
