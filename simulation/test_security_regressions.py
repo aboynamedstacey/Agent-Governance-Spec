@@ -452,7 +452,7 @@ class FastPathOptimizationTests(unittest.TestCase):
         self.assertEqual(self.gov.evaluate(different_agent, "mail.draft", self.params)[0], "ALLOW")
         self.assertEqual(self.gov.evaluate(limited_agent, "mail.draft", self.params)[0], "ALLOW")
 
-    def test_delegation_tree_counts_ancestors_but_not_siblings(self):
+    def test_delegation_tree_counts_entire_tree_including_siblings(self):
         self.grant.rate_limits = [{
             "action_pattern": "mail.draft", "max_count": 3,
             "window": "1h", "scope": "DELEGATION_TREE"}]
@@ -465,13 +465,50 @@ class FastPathOptimizationTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
         self.assertEqual(self.gov.evaluate(sibling, "mail.draft", self.params)[0], "ALLOW")
-        # Root's action counts for the child. The sibling's does not.
-        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
+        # An action from any sibling consumes the shared delegation-tree limit.
         self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
         self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[2],
                          "RATE_LIMIT_EXCEEDED")
         self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
                          "RATE_LIMIT_EXCEEDED")
+
+    def test_type_rate_rule_without_non_schema_type_hint(self):
+        type_limit = [{"action_pattern": "mail.draft", "max_count": 1,
+                       "window": "1h", "scope": "TYPE"}]
+        grant = self.gov.create_grant(
+            "indexed", self.scope, self.scope["authorized_actions"], 3600,
+            "human", rate_limits=type_limit)
+        agent = self.gov.create_root_identity(grant)
+        self.assertEqual(self.gov.evaluate(agent, "mail.draft", self.params)[0], "ALLOW")
+        second = self.gov.create_root_identity(grant)
+        self.assertEqual(self.gov.evaluate(second, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+
+    def test_budget_type_shared_across_instances(self):
+        self.grant.damage_budgets = [{
+            "metric": "recipients", "accumulator": "recipients", "threshold": 1,
+            "window": "1h", "scope": "TYPE", "on_exceed": "DENY",
+            "evaluation_tier": 2}]
+        another = self.gov.create_root_identity(self.grant)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(another, "mail.draft", self.params)[2],
+                         "DAMAGE_BUDGET_EXCEEDED")
+
+    def test_budget_tree_shared_across_siblings(self):
+        self.grant.damage_budgets = [{
+            "metric": "recipients", "accumulator": "recipients", "threshold": 1,
+            "window": "1h", "scope": "DELEGATION_TREE", "on_exceed": "DENY",
+            "evaluation_tier": 2}]
+        scope = draft_scope()
+        first, error = self.gov.create_child_identity(
+            self.root, "helper", scope, scope["authorized_actions"])
+        self.assertIsNone(error)
+        other, error = self.gov.create_child_identity(
+            self.root, "helper", scope, scope["authorized_actions"])
+        self.assertIsNone(error)
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(other, "mail.draft", self.params)[2],
+                         "DAMAGE_BUDGET_EXCEEDED")
 
     def test_usage_history_stays_bounded(self):
         for n in range(350):
