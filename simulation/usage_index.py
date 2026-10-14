@@ -1,11 +1,11 @@
-"""Bounded-window usage indexes for the in-memory governance test stack.
+"""Keyed rolling-window accounting for the in-memory governance fixture.
 
-Each decision reads only the relevant keyed windows. Entries expire lazily in
-amortized constant work; an optional sweep removes inactive keys off-path.
-This is not a durable, concurrent budget reservation service.
+Queries visit only the relevant counters. TYPE rate limits span grants; a
+DELEGATION_TREE query includes the caller's ancestors and descendants, but
+not siblings. Expiry is amortized over recorded events. Production needs
+durable, atomic reservations and shared state across workers.
 """
 from collections import deque
-from datetime import timedelta
 import math
 
 from reference_algorithms import matches, parse_duration
@@ -22,38 +22,76 @@ def _resolve(path, obj):
 
 class RollingUsageIndex:
     def __init__(self):
-        self.rate_windows = {}
+        self.rate_windows = {}          # (grant, rule, scope, node) -> timestamps
+        self.direct_rate_windows = {}   # (grant, rule, node) -> direct calls only
+        self.type_limits = {}           # agent type -> {(type, pattern, duration): max_count}
+        self.type_windows = {}          # shared counters across all grants
+        self.incomplete_type_limits = set()
         self.budget_windows = {}
         self.budget_totals = {}
 
     @staticmethod
-    def _rate_key(grant, index, limit, identity):
-        scope = limit.get("scope", "INSTANCE")
-        if scope == "INSTANCE":
-            owner = identity.instance_id
-        elif scope == "TYPE":
-            owner = limit.get("agent_type")
-        elif scope == "DELEGATION_TREE":
-            owner = identity.instance_id
-        else:
-            raise ValueError("Unsupported rate-limit scope")
-        return grant.grant_id, index, scope, owner
-
-    def _rate_window(self, key, now, duration):
-        queue = self.rate_windows.get(key)
+    def _window(registry, key, now, duration):
+        queue = registry.get(key)
         if queue is not None:
-            start = now - duration
-            while queue and queue[0] < start:
+            cutoff = now - duration
+            while queue and queue[0] < cutoff:
                 queue.popleft()
             if not queue:
-                del self.rate_windows[key]
+                registry.pop(key, None)
                 return None
         return queue
 
+    def register_grant(self, grant):
+        for limit in grant.rate_limits:
+            if limit.get("scope", "INSTANCE") != "TYPE":
+                continue
+            self._register_type_rule(limit)
+
+    def _register_type_rule(self, limit):
+        agent_type = limit.get("agent_type")
+        if not agent_type:
+            raise ValueError("TYPE rate limits require an agent_type")
+        duration = parse_duration(limit["window"])
+        key = (agent_type, limit["action_pattern"], duration.total_seconds())
+        limits = self.type_limits.setdefault(agent_type, {})
+        previous = limits.get(key)
+        if previous is None:
+            limits[key] = limit["max_count"]
+        elif limit["max_count"] > previous:
+            # A wider limit cannot recover older timestamps evicted under
+            # the earlier bound. Fail closed until a complete window elapses.
+            limits[key] = limit["max_count"]
+            if key in self.type_windows and len(self.type_windows[key]) == previous:
+                self.incomplete_type_limits.add(key)
+            existing = self.type_windows.get(key)
+            if existing is not None:
+                self.type_windows[key] = deque(existing, maxlen=limit["max_count"])
+        return key
+
     def rate_permits(self, grant, index, limit, identity, now):
-        key = self._rate_key(grant, index, limit, identity)
-        queue = self._rate_window(key, now, parse_duration(limit["window"]))
-        return queue is None or len(queue) < limit["max_count"]
+        scope = limit.get("scope", "INSTANCE")
+        duration = parse_duration(limit["window"])
+        if scope == "TYPE":
+            key = self._register_type_rule(limit)
+            if key in self.incomplete_type_limits:
+                return False
+            window = self._window(self.type_windows, key, now, duration)
+            return window is None or len(window) < limit["max_count"]
+        if scope not in ("INSTANCE", "DELEGATION_TREE"):
+            raise ValueError("Unsupported rate-limit scope")
+
+        key = (grant.grant_id, index, scope, identity.instance_id)
+        window = self._window(self.rate_windows, key, now, duration)
+        count = len(window) if window else 0
+        if scope == "DELEGATION_TREE":
+            for ancestor_id in identity.lineage_chain[:-1]:
+                ancestor_key = (grant.grant_id, index, ancestor_id)
+                direct = self._window(self.direct_rate_windows, ancestor_key, now, duration)
+                count += len(direct) if direct else 0
+                if count >= limit["max_count"]:
+                    return False
+        return count < limit["max_count"]
 
     def _budget_window(self, key, now, duration):
         queue = self.budget_windows.get(key)
@@ -66,8 +104,8 @@ class RollingUsageIndex:
             if queue:
                 self.budget_totals[key] = total
             else:
-                del self.budget_windows[key]
-                del self.budget_totals[key]
+                self.budget_windows.pop(key, None)
+                self.budget_totals.pop(key, None)
                 return None
         return queue
 
@@ -83,30 +121,53 @@ class RollingUsageIndex:
         return accumulated + value <= budget["threshold"], accumulated, value
 
     def record(self, grant, identity, action_type, params, now):
+        # TYPE counters include activity from other grants, including grants
+        # without a TYPE limit of their own.
+        for key, max_count in self.type_limits.get(identity.agent_type, {}).items():
+            if not matches(action_type, key[1]):
+                continue
+            window = self._window(self.type_windows, key, now,
+                                  parse_duration(str(key[2]) + "s"))
+            if window is None:
+                window = deque(maxlen=max_count)
+                self.type_windows[key] = window
+            window.append(now)
+
         for index, limit in enumerate(grant.rate_limits):
             if not matches(action_type, limit["action_pattern"]):
                 continue
             scope = limit.get("scope", "INSTANCE")
-            if scope == "TYPE" and identity.agent_type != limit.get("agent_type"):
-                continue
-            owners = (identity.lineage_chain if scope == "DELEGATION_TREE"
-                      else [identity.instance_id])
+            if scope == "TYPE":
+                continue  # Accounted for by the shared type registry.
+            if scope == "DELEGATION_TREE":
+                owners = identity.lineage_chain
+            elif scope == "INSTANCE":
+                owners = [identity.instance_id]
+            else:
+                raise ValueError("Unsupported rate-limit scope")
             for owner in owners:
-                key = (grant.grant_id, index, scope,
-                       owner if scope != "TYPE" else limit.get("agent_type"))
-                queue = self._rate_window(key, now, parse_duration(limit["window"]))
+                key = (grant.grant_id, index, scope, owner)
+                queue = self._window(self.rate_windows, key, now,
+                                     parse_duration(limit["window"]))
                 if queue is None:
                     queue = deque()
                     self.rate_windows[key] = queue
                 queue.append(now)
+            if scope == "DELEGATION_TREE":
+                key = (grant.grant_id, index, identity.instance_id)
+                direct = self._window(self.direct_rate_windows, key, now,
+                                      parse_duration(limit["window"]))
+                if direct is None:
+                    direct = deque()
+                    self.direct_rate_windows[key] = direct
+                direct.append(now)
 
         for index, budget in enumerate(grant.damage_budgets):
             if budget.get("evaluation_tier", 2) != 2:
                 continue
             value = _resolve(budget["accumulator"], params)
-            if value is None:
+            if value is None or value == 0:
                 continue
-            # The evaluator must reject malformed budget amounts before record.
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError("Invalid budget amount")
             key = (grant.grant_id, index, identity.instance_id)
@@ -119,13 +180,25 @@ class RollingUsageIndex:
             self.budget_totals[key] += value
 
     def sweep(self, now, grants):
-        """Off-path cleanup; not used when authorizing a tool action."""
+        """Reclaim idle counters off-path, not during authorization."""
         for key in list(self.rate_windows):
             grant = grants.get(key[0])
             if grant is None or key[1] >= len(grant.rate_limits):
                 self.rate_windows.pop(key, None)
             else:
-                self._rate_window(key, now, parse_duration(grant.rate_limits[key[1]]["window"]))
+                self._window(self.rate_windows, key, now,
+                             parse_duration(grant.rate_limits[key[1]]["window"]))
+        for key in list(self.direct_rate_windows):
+            grant = grants.get(key[0])
+            if grant is None or key[1] >= len(grant.rate_limits):
+                self.direct_rate_windows.pop(key, None)
+            else:
+                self._window(self.direct_rate_windows, key, now,
+                             parse_duration(grant.rate_limits[key[1]]["window"]))
+        for key in list(self.type_windows):
+            self._window(self.type_windows, key, now, parse_duration(str(key[2]) + "s"))
+            if key not in self.type_windows:
+                self.incomplete_type_limits.discard(key)
         for key in list(self.budget_windows):
             grant = grants.get(key[0])
             if grant is None or key[1] >= len(grant.damage_budgets):
