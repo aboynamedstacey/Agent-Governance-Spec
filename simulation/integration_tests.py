@@ -231,8 +231,23 @@ class GovernanceStack:
 
     # ── Policy Gate (with rate limits and damage budgets) ──
 
+    def _lineage_active(self, identity: Identity) -> bool:
+        """Check that the identity and every ancestor are still registered and active."""
+        if (not identity.lineage_chain or
+                identity.lineage_chain[-1] != identity.instance_id or
+                self.identities.get(identity.instance_id) is not identity):
+            return False
+        for ancestor_id in identity.lineage_chain:
+            ancestor = self.identities.get(ancestor_id)
+            if (ancestor is None or ancestor.terminated or
+                    ancestor.grant_id != identity.grant_id or
+                    self.now >= ancestor.expires_at):
+                return False
+        return True
+
     def evaluate(self, identity: Identity, action_type: str,
-                 params: dict = None) -> tuple[str, int, Optional[str]]:
+                 params: dict = None, *, enqueue_escalation: bool = True,
+                 record_action: bool = True) -> tuple[str, int, Optional[str]]:
         params = params or {}
 
         if identity.terminated:
@@ -251,7 +266,7 @@ class GovernanceStack:
                          action=action_type, reason=reason)
             return "DENY", 1, reason
 
-        if self.now >= identity.expires_at:
+        if not self._lineage_active(identity):
             self._audit("ActionDenied", identity.instance_id,
                          agent_type=identity.agent_type,
                          action=action_type, reason="IDENTITY_EXPIRED")
@@ -310,7 +325,7 @@ class GovernanceStack:
                      reason=reason)
 
         # Record in action log for rate limit / damage budget tracking
-        if decision in ("ALLOW", "ATTENUATE"):
+        if record_action and decision in ("ALLOW", "ATTENUATE"):
             self.action_log.append({
                 "agent_id": identity.instance_id,
                 "agent_type": identity.agent_type,
@@ -319,15 +334,18 @@ class GovernanceStack:
                 "timestamp": self.now,
             })
 
-        if decision == "ESCALATE":
+        if enqueue_escalation and decision == "ESCALATE":
             self.escalation_queue.append({
                 "escalation_id": f"esc-{uuid.uuid4().hex[:8]}",
                 "agent_id": identity.instance_id,
                 "action_type": action_type,
-                "params": params,
+                "params": deepcopy(params),
+                "scope_snapshot": deepcopy(identity.scope),
+                "rules_snapshot": deepcopy(identity.rules),
                 "created_at": self.now,
                 "timeout_seconds": 900,  # 15 minutes default
                 "on_timeout": "DENY",
+                "state": "PENDING",
             })
 
         return decision, tier, reason
@@ -337,45 +355,103 @@ class GovernanceStack:
     def resolve_escalation(self, escalation_id: str, decision: str,
                            justification: str, decider: str,
                            modified_params: dict = None) -> dict:
-        esc = next((e for e in self.escalation_queue if e["escalation_id"] == escalation_id), None)
+        """Resolve a pending review without treating approval as tool execution.
+
+        In this in-memory fixture there is no execution authorization token or
+        atomic external side-effect commit. Callers must not execute from this
+        return value. A production boundary must recheck the approved request,
+        grant and policy at the moment of execution.
+        """
+        esc = next((e for e in self.escalation_queue
+                    if e["escalation_id"] == escalation_id), None)
         if not esc:
             return {"error": "Escalation not found"}
+        if esc.get("state") != "PENDING":
+            return {"error": "Escalation already resolved"}
+        if decision not in {"APPROVE", "DENY", "MODIFY"}:
+            return {"error": "Invalid escalation decision"}
+        if (not isinstance(justification, str) or not justification.strip() or
+                not isinstance(decider, str) or not decider.strip()):
+            return {"error": "Identified reviewer and justification required"}
+        if (decision == "MODIFY" and not isinstance(modified_params, dict)) or (
+                decision != "MODIFY" and modified_params is not None):
+            return {"error": "Modified parameters required only for MODIFY"}
+        if self.now >= esc["created_at"] + timedelta(seconds=esc["timeout_seconds"]):
+            self.timeout_escalation(escalation_id)
+            return {"escalation_id": escalation_id, "decision": "DENY",
+                    "reason": "ESCALATION_TIMEOUT"}
 
+        identity = self.identities.get(esc["agent_id"])
+        approved = False
+        reason = "REVIEW_DENIED"
+        requested_params = (deepcopy(modified_params) if decision == "MODIFY"
+                            else deepcopy(esc["params"]))
+
+        if decision in {"APPROVE", "MODIFY"}:
+            grant = self.grants.get(identity.grant_id) if identity else None
+            if not identity or not grant or not grant.is_active(self.now) or not self._lineage_active(identity):
+                reason = "AUTHORITY_INACTIVE"
+            elif (identity.scope != esc["scope_snapshot"] or
+                  identity.rules != esc["rules_snapshot"]):
+                reason = "POLICY_CHANGED"
+            else:
+                # Full gate re-evaluation: expiration, ancestors, global
+                # constraints, rate/damage limits, and ordered action rules.
+                # It must not enqueue another escalation or count a
+                # not-yet-executed action as completed.
+                current, _, gate_reason = self.evaluate(
+                    identity, esc["action_type"], requested_params,
+                    enqueue_escalation=False, record_action=False)
+                if decision == "MODIFY":
+                    approved = current == "ALLOW"
+                else:
+                    # Review can resolve an explicit ESCALATE rule. It cannot
+                    # override DENY, failed rule-local caps, or an escalation
+                    # caused by a damage budget or failed ALLOW constraint.
+                    rule = next((r for r in identity.rules
+                                 if matches(esc["action_type"], r["pattern"])), None)
+                    approved = (
+                        current == "ESCALATE" and
+                        gate_reason in (None, "ESCALATION_REQUIRED") and
+                        rule is not None and rule["decision"] == "ESCALATE" and
+                        all(evaluate_constraint(c["field"], c["operator"],
+                                                c["value"], requested_params)
+                            for c in rule.get("constraints", [])))
+                reason = "REVIEW_APPROVED" if approved else (
+                    gate_reason or "POLICY_NOT_SATISFIED")
+
+        esc["state"] = "APPROVED" if approved else "DENIED"
+        esc["resolved_at"] = self.now
+        esc["resolution_params"] = deepcopy(requested_params) if approved else None
         self._audit("EscalationResolved", esc["agent_id"],
-                     action=esc["action_type"],
-                     detail=f"{decision} by {decider}: {justification}")
-
-        if decision == "APPROVE":
-            self._audit("ActionExecuted", esc["agent_id"],
-                         action=esc["action_type"], detail="Executed after escalation approval")
-
-        if decision == "MODIFY" and modified_params:
-            identity = self.identities.get(esc["agent_id"])
-            if identity:
-                d, t, r = evaluate_rules(identity.rules, esc["action_type"], modified_params)
-                self._audit("ActionEvaluated", esc["agent_id"],
-                             agent_type=identity.agent_type,
-                             action=esc["action_type"], decision=d, tier=t, reason=r,
-                             detail="Re-evaluation after MODIFY")
-                if d == "ALLOW":
-                    self._audit("ActionExecuted", esc["agent_id"],
-                                 action=esc["action_type"],
-                                 detail="Executed after MODIFY re-evaluation")
-
-        return {"escalation_id": escalation_id, "decision": decision}
+                    action=esc["action_type"], decision=decision,
+                    reason=reason, decider=decider,
+                    justification=justification, escalation_id=escalation_id,
+                    detail="Approval is not execution")
+        return {"escalation_id": escalation_id,
+                "decision": decision if approved else "DENY",
+                "status": "APPROVED_PENDING_EXECUTION" if approved else "DENIED",
+                "reason": reason}
 
     def timeout_escalation(self, escalation_id: str) -> dict:
-        """Apply timeout behavior when human does not respond."""
-        esc = next((e for e in self.escalation_queue if e["escalation_id"] == escalation_id), None)
+        """Apply the fail-closed timeout exactly once, at or after its deadline."""
+        esc = next((e for e in self.escalation_queue
+                    if e["escalation_id"] == escalation_id), None)
         if not esc:
             return {"error": "Escalation not found"}
-
-        applied_decision = esc.get("on_timeout", "DENY")
+        if esc.get("state") != "PENDING":
+            return {"error": "Escalation already resolved"}
+        if self.now < esc["created_at"] + timedelta(seconds=esc["timeout_seconds"]):
+            return {"error": "Escalation has not timed out"}
+        esc["state"] = "TIMED_OUT"
+        esc["resolved_at"] = self.now
+        # The local fixture never auto-approves a timed-out operation.
         self._audit("EscalationTimedOut", esc["agent_id"],
-                     action=esc["action_type"],
-                     detail=f"Timed out after {esc['timeout_seconds']}s, applied: {applied_decision}",
-                     decision=applied_decision)
-        return {"escalation_id": escalation_id, "applied_decision": applied_decision}
+                    action=esc["action_type"],
+                    escalation_id=escalation_id,
+                    detail=f"Timed out after {esc['timeout_seconds']}s",
+                    decision="DENY")
+        return {"escalation_id": escalation_id, "applied_decision": "DENY"}
 
     def promote_candidate_rule(self, proposer: str, approver: str) -> tuple[bool, str]:
         if proposer == approver:
