@@ -417,8 +417,10 @@ class GovernanceStack:
                         all(evaluate_constraint(c["field"], c["operator"],
                                                 c["value"], requested_params)
                             for c in rule.get("constraints", [])))
-                reason = "REVIEW_APPROVED" if approved else (
-                    gate_reason or "POLICY_NOT_SATISFIED")
+                reason = ("REVIEW_APPROVED" if approved else
+                          "POLICY_NOT_SATISFIED" if decision == "APPROVE" and
+                          gate_reason == "ESCALATION_REQUIRED" else
+                          gate_reason or "POLICY_NOT_SATISFIED")
 
         esc["state"] = "APPROVED" if approved else "DENIED"
         esc["resolved_at"] = self.now
