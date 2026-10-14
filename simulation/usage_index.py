@@ -6,6 +6,7 @@ not siblings. Expiry is amortized over recorded events. Production needs
 durable, atomic reservations and shared state across workers.
 """
 from collections import deque
+from datetime import timedelta
 import math
 
 from reference_algorithms import matches, parse_duration
@@ -74,9 +75,11 @@ class RollingUsageIndex:
         duration = parse_duration(limit["window"])
         if scope == "TYPE":
             key = self._register_type_rule(limit)
-            if key in self.incomplete_type_limits:
-                return False
             window = self._window(self.type_windows, key, now, duration)
+            if key in self.incomplete_type_limits:
+                if window is not None:
+                    return False
+                self.incomplete_type_limits.discard(key)
             return window is None or len(window) < limit["max_count"]
         if scope not in ("INSTANCE", "DELEGATION_TREE"):
             raise ValueError("Unsupported rate-limit scope")
@@ -127,7 +130,7 @@ class RollingUsageIndex:
             if not matches(action_type, key[1]):
                 continue
             window = self._window(self.type_windows, key, now,
-                                  parse_duration(str(key[2]) + "s"))
+                                  timedelta(seconds=key[2]))
             if window is None:
                 window = deque(maxlen=max_count)
                 self.type_windows[key] = window
@@ -196,7 +199,7 @@ class RollingUsageIndex:
                 self._window(self.direct_rate_windows, key, now,
                              parse_duration(grant.rate_limits[key[1]]["window"]))
         for key in list(self.type_windows):
-            self._window(self.type_windows, key, now, parse_duration(str(key[2]) + "s"))
+            self._window(self.type_windows, key, now, timedelta(seconds=key[2]))
             if key not in self.type_windows:
                 self.incomplete_type_limits.discard(key)
         for key in list(self.budget_windows):
