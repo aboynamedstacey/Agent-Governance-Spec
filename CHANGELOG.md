@@ -1,5 +1,20 @@
 # Changelog
 
+## Fast-path optimization (2026-10-14)
+
+- Replaced full audit-history verification on each local tool request with an
+  incremental head guard and explicit off-path deep validation. Detectable
+  corruption quarantines the boundary. Prior-history mutations require periodic
+  full verification and independently trusted anchors in production.
+- Replaced in-memory rate-limit and damage-budget history scans with indexed
+  rolling windows, and capped diagnostic action-log retention at 256 entries.
+- Content-addressed policy snapshots now appear once per digest in the local
+  audit chain. Subsequent action requests carry a digest reference.
+- Added adversarial regression tests and a reproducible Python/SQLite benchmark.
+- Defined measurable deployment targets, storage guidance, and limitations in
+  docs/performance-profile.md. The optimized fixture is not a durable,
+  concurrency-safe authorization or audit service.
+
 ## 0.7.0-draft (2026-09-17)
 
 Security and evidence hardening; see issue #1.
