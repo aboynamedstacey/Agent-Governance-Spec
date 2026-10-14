@@ -97,6 +97,140 @@ class DelegationTests(unittest.TestCase):
                         self.assertTrue(cd == "DENY" or cd == pd)
 
 
+
+class EscalationSafetyTests(unittest.TestCase):
+    """An escalation resolution cannot revive or enlarge an authority grant."""
+
+    def setUp(self):
+        self.gov = GovernanceStack()
+        self.scope = {
+            "authorized_actions": [
+                {"pattern": "mail.send", "decision": "ESCALATE"},
+                {"pattern": "mail.draft", "decision": "ALLOW",
+                 "constraints": [{"field": "recipients", "operator": "LESS_THAN_OR_EQUAL",
+                                  "value": 2}], "on_constraint_fail": "ESCALATE"},
+            ],
+            "delegation": {"can_delegate": False, "max_depth": 0},
+            "parameter_constraints": [],
+            "resource_constraints": [],
+            "output_policy": {"authorized_output_types": []},
+        }
+        self.grant = self.gov.create_grant(
+            "reviewed-mail", self.scope, self.scope["authorized_actions"], 3600, "human")
+        self.agent = self.gov.create_root_identity(self.grant)
+
+    def escalate(self, action="mail.send", params=None):
+        result, _, _ = self.gov.evaluate(
+            self.agent, action, params if params is not None else {"recipients": 1})
+        self.assertEqual(result, "ESCALATE")
+        return self.gov.escalation_queue[-1]["escalation_id"]
+
+    def resolve(self, escalation_id, decision="APPROVE", modified_params=None):
+        return self.gov.resolve_escalation(
+            escalation_id, decision, "Reviewed exact request and recipient", "human:reviewer",
+            modified_params=modified_params)
+
+    def test_approval_is_not_execution(self):
+        escalation_id = self.escalate()
+        self.assertEqual(self.resolve(escalation_id)["status"],
+                         "APPROVED_PENDING_EXECUTION")
+        self.assertFalse(any(e["event_type"] == "ActionExecuted" for e in self.gov.audit))
+        self.assertTrue(verify_chain(self.gov.chain, "SHA256", self.gov.genesis)[0])
+
+    def test_approval_denied_after_revocation(self):
+        escalation_id = self.escalate()
+        self.gov.revoke_grant(self.grant.grant_id, "human")
+        self.assertEqual(self.resolve(escalation_id)["decision"], "DENY")
+        self.assertFalse(any(e["event_type"] == "ActionExecuted" for e in self.gov.audit))
+
+    def test_approval_denied_after_identity_expiration(self):
+        escalation_id = self.escalate()
+        self.agent.expires_at = self.gov.now
+        self.assertEqual(self.resolve(escalation_id)["decision"], "DENY")
+
+    def test_approval_denied_if_parent_terminated(self):
+        self.root_scope = draft_scope(True)
+        grant = self.gov.create_grant(
+            "root", self.root_scope, self.root_scope["authorized_actions"], 3600, "human")
+        root = self.gov.create_root_identity(grant)
+        child_scope = draft_scope()
+        child, error = self.gov.create_child_identity(
+            root, "child", child_scope, child_scope["authorized_actions"])
+        self.assertIsNone(error)
+        self.gov.evaluate(child, "mail.draft", {"recipients": 3})
+        self.assertEqual(self.gov.escalation_queue[-1]["state"], "PENDING")
+        root.terminated = True
+        entry = self.gov.escalation_queue[-1]
+        result = self.resolve(entry["escalation_id"], "MODIFY", {"recipients": 1})
+        self.assertEqual(result["decision"], "DENY")
+
+    def test_approval_at_deadline_times_out_once(self):
+        escalation_id = self.escalate()
+        self.gov.advance_time(seconds=900)
+        self.assertEqual(self.resolve(escalation_id)["reason"], "ESCALATION_TIMEOUT")
+        self.assertEqual(self.gov.timeout_escalation(escalation_id).get("error"),
+                         "Escalation already resolved")
+        self.assertEqual(sum(e["event_type"] == "EscalationTimedOut"
+                             for e in self.gov.audit), 1)
+
+    def test_early_timeout_is_rejected(self):
+        escalation_id = self.escalate()
+        self.assertEqual(self.gov.timeout_escalation(escalation_id)["error"],
+                         "Escalation has not timed out")
+        self.assertEqual(self.gov.escalation_queue[-1]["state"], "PENDING")
+
+    def test_repeated_approval_is_rejected(self):
+        escalation_id = self.escalate()
+        self.resolve(escalation_id)
+        self.assertEqual(self.resolve(escalation_id).get("error"),
+                         "Escalation already resolved")
+        self.assertEqual(sum(e["event_type"] == "EscalationResolved"
+                             for e in self.gov.audit), 1)
+
+    def test_approval_cannot_override_failed_rule_constraint(self):
+        escalation_id = self.escalate("mail.draft", {"recipients": 3})
+        result = self.resolve(escalation_id)
+        self.assertEqual(result["decision"], "DENY")
+        self.assertEqual(result["reason"], "POLICY_NOT_SATISFIED")
+
+    def test_modification_rechecks_global_constraints(self):
+        self.agent.scope["parameter_constraints"] = [
+            {"field": "tenant", "operator": "EQUALS", "value": "a"}]
+        escalation_id = self.escalate("mail.draft", {"recipients": 3, "tenant": "a"})
+        result = self.resolve(escalation_id, "MODIFY",
+                              {"recipients": 1, "tenant": "b"})
+        self.assertEqual(result["decision"], "DENY")
+        self.assertEqual(result["reason"], "CONSTRAINT_VIOLATION")
+
+    def test_modification_within_limits_is_only_a_review(self):
+        escalation_id = self.escalate("mail.draft", {"recipients": 3})
+        count = len(self.gov.action_log)
+        qlen = len(self.gov.escalation_queue)
+        result = self.resolve(escalation_id, "MODIFY", {"recipients": 1})
+        self.assertEqual(result["status"], "APPROVED_PENDING_EXECUTION")
+        self.assertEqual(self.gov.escalation_queue[-1]["resolution_params"],
+                         {"recipients": 1})
+        self.assertEqual(len(self.gov.action_log), count)
+        self.assertEqual(len(self.gov.escalation_queue), qlen)
+        self.assertFalse(any(e["event_type"] == "ActionExecuted" for e in self.gov.audit))
+
+    def test_changed_policy_invalidates_pending_review(self):
+        escalation_id = self.escalate()
+        self.agent.rules[0]["decision"] = "DENY"
+        self.assertEqual(self.resolve(escalation_id)["reason"], "POLICY_CHANGED")
+
+    def test_missing_reviewer_and_invalid_resolution_do_not_consume_review(self):
+        escalation_id = self.escalate()
+        self.assertIn("error", self.gov.resolve_escalation(
+            escalation_id, "APPROVE", "", "human:reviewer"))
+        self.assertIn("error", self.gov.resolve_escalation(
+            escalation_id, "OVERRIDE", "because", "human:reviewer"))
+        self.assertIn("error", self.resolve(escalation_id, "MODIFY"))
+        self.assertEqual(self.gov.escalation_queue[-1]["state"], "PENDING")
+        self.assertEqual(self.resolve(escalation_id)["status"],
+                         "APPROVED_PENDING_EXECUTION")
+
+
 class TrustTests(unittest.TestCase):
     def setUp(self):
         self.state = init_trust_state()
