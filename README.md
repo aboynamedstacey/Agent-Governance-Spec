@@ -8,7 +8,7 @@ those controls across agent runtimes through shared contracts, schemas, and
 reference algorithms.
 
 **Current revision: 0.7.0-draft.** Includes a Python reference implementation,
-152 passing tests, and an executable local tool workflow.
+174 passing tests (with 13 stateful vector definitions skipped), and an executable local tool workflow.
 
 ## Design
 
@@ -57,7 +57,12 @@ Run the verification suites:
 python simulation/reference_algorithms.py
 python simulation/integration_tests.py
 python -m unittest discover -s simulation -p 'test_*.py'
+python simulation/benchmark.py --actions 2000 --preload 10000
 ```
+
+The benchmark measures local overhead and audit bytes, not production latency.
+See the [performance and storage profile](docs/performance-profile.md) for
+provisional p95/p99 targets, incremental audit checks, and deployment limitations.
 
 ## What this revision improves
 
@@ -75,7 +80,9 @@ High-risk outputs require review, even when their keywords match the task.
 
 **Audit evidence covers the decision.** Hashes cover the full recorded payload,
 using RFC 8785 canonicalization. The workflow links execution to its request,
-policy snapshot, grant, and originating human.
+content-addressed policy snapshot, grant, and originating human. The reference
+workflow uses incremental audit-tail checks and rolling policy counters; full
+historical verification remains an explicit off-path operation.
 
 ## System guarantees
 
@@ -107,6 +114,8 @@ A conforming implementation preserves nine properties:
 | [Regression tests](simulation/test_security_regressions.py) | Adversarial and contract tests. |
 | [Implementation status](STATUS.md) | Verified coverage and current boundaries. |
 | [Deployment validation](docs/operational-validation.md) | Pilot acceptance criteria. |
+| [Performance profile](docs/performance-profile.md) | Latency and storage targets, measurement method, and limits. |
+| [Local benchmark](simulation/benchmark.py) | Reproducible proxy overhead and audit-size measurements. |
 | [Changelog](CHANGELOG.md) | Revisions and migration notes. |
 
 ## Next milestones
