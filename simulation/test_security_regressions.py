@@ -345,7 +345,11 @@ class WorkflowTests(unittest.TestCase):
         request = by_id[decision["causal_parent"]]
         self.assertEqual(request["granted_by"], "human")
         self.assertEqual(request["grant_id"], self.grant.grant_id)
-        self.assertIn("policy_snapshot", request)
+        policy = next(e for e in self.gov.chain
+                      if e["event_type"] == "PolicySnapshotStored" and
+                      e["policy_digest"] == request["policy_digest"])
+        self.assertEqual(policy["policy_digest"], request["policy_digest"])
+        self.assertIn("authorized_actions", policy["policy_snapshot"])
         self.assertEqual(request["params"], self.params)
 
     def test_bool_does_not_pass_numeric_tool_contract(self):
