@@ -790,11 +790,12 @@ def run_integration_tests():
     check("EL-001a", "Action escalated", d == "ESCALATE")
 
     esc = gov6.escalation_queue[-1]
-    gov6.resolve_escalation(esc["escalation_id"], "APPROVE",
-                             "Verified recipient is authorized", "human:jane@org")
-    check("EL-001b", "Escalation resolved with APPROVE and action executed",
+    approval = gov6.resolve_escalation(esc["escalation_id"], "APPROVE",
+                                       "Verified recipient is authorized", "human:jane@org")
+    check("EL-001b", "Approval does not claim execution",
+          approval.get("status") == "APPROVED_PENDING_EXECUTION" and
           any(e["event_type"] == "EscalationResolved" for e in gov6.audit) and
-          any(e["event_type"] == "ActionExecuted" for e in gov6.audit))
+          not any(e["event_type"] == "ActionExecuted" for e in gov6.audit))
 
     # EL-002: TIMEOUT
     gov_to = GovernanceStack()
@@ -817,7 +818,7 @@ def run_integration_tests():
     write_rules = [
         {"pattern": "database.write", "decision": "ALLOW", "constraints": [
             {"field": "record_count", "operator": "LESS_THAN_OR_EQUAL", "value": 50}
-        ]},
+        ], "on_constraint_fail": "ESCALATE"},
         {"pattern": "database.write_bulk", "decision": "ESCALATE", "constraints": []},
     ]
     write_scope = {
@@ -830,16 +831,16 @@ def run_integration_tests():
                                 ttl_seconds=3600, granted_by="human:alex@org")
     agent7 = gov7.create_root_identity(grant7)
 
-    d, _, _ = gov7.evaluate(agent7, "database.write_bulk", {"record_count": 100})
-    check("EL-003a", "Bulk write escalated", d == "ESCALATE")
+    d, _, _ = gov7.evaluate(agent7, "database.write", {"record_count": 100})
+    check("EL-003a", "Over-cap write escalated", d == "ESCALATE")
 
     esc7 = gov7.escalation_queue[-1]
-    gov7.resolve_escalation(esc7["escalation_id"], "MODIFY",
-                             "Approved with reduced batch", "human:alex@org",
-                             modified_params={"record_count": 25})
-    re_evals = [e for e in gov7.audit if e["event_type"] == "ActionEvaluated"
-                and "Re-evaluation" in e.get("detail", "")]
-    check("EL-003b", "Modified action re-evaluated", len(re_evals) > 0)
+    modified = gov7.resolve_escalation(esc7["escalation_id"], "MODIFY",
+                                      "Approved with reduced batch", "human:alex@org",
+                                      modified_params={"record_count": 25})
+    check("EL-003b", "Modified action passes full gate without execution",
+          modified.get("status") == "APPROVED_PENDING_EXECUTION" and
+          not any(e["event_type"] == "ActionExecuted" for e in gov7.audit))
 
     # EL-004/005: Separation of duties
     ok, _ = gov7.promote_candidate_rule("human:alice@org", "human:bob@org")
