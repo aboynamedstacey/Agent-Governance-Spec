@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 
 from integration_tests import GovernanceStack
 from reference_algorithms import append_to_chain, verify_chain
+from audit_head import AuditHeadGuard
 
 
 def draft_scope(delegate=False):
@@ -43,6 +44,7 @@ class LocalExecutionBoundary:
         self.db.execute("CREATE TABLE drafts (body TEXT, recipients INTEGER)")
         self.db.execute("CREATE TABLE sent (body TEXT)")
         self.available = True
+        self.audit_guard = AuditHeadGuard(self.stack.chain, self.stack.genesis)
 
     def execute(self, agent_id, action, params):
         params = deepcopy(params)
@@ -57,7 +59,7 @@ class LocalExecutionBoundary:
         if (not isinstance(params.get("body"), str) or
                 type(params.get("recipients")) is not int or params["recipients"] < 1):
             return {"decision": "DENY", "reason": "invalid_parameters"}
-        if not verify_chain(self.stack.chain, "SHA256", self.stack.genesis)[0]:
+        if not self.audit_guard.check_incremental():
             return {"decision": "DENY", "reason": "audit_integrity"}
         policy = json.dumps(identity.scope, sort_keys=True, separators=(",", ":"))
         request_id = f"request-{len(self.stack.chain)}"
@@ -92,6 +94,10 @@ class LocalExecutionBoundary:
             self.db.rollback()
             raise
         return {"decision": "ALLOW", "outcome": "success"}
+
+    def verify_audit_full(self):
+        """Use off the action path, for example in a scheduled integrity check."""
+        return self.audit_guard.verify_full()
 
     def counts(self):
         return {table: self.db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
