@@ -16,6 +16,11 @@ It proves the tested requests produce these effects:
 Regression tests also exercise audit write failure, decision tampering, exact
 expiration, invalid parameters, and reconstruction of grantor, grant, lineage,
 policy snapshot, request, decision, and outcome. The fixture blocks ATTENUATE pending a validated transformed request.
+Escalation regressions check revocation, lineage termination, policy drift,
+expired and duplicate approvals, and complete re-evaluation of modified actions.
+Approval is an audit-recorded review outcome, not a tool execution. This fixture
+intentionally cannot execute an approved escalation without a separate trusted
+execution adapter.
 
 ## First deployment acceptance criteria
 
@@ -27,7 +32,9 @@ policy snapshot, request, decision, and outcome. The fixture blocks ATTENUATE pe
    Resource allowlists must be enforced by the adapter, not merely declared.
 3. Authenticate the initiating human and each agent. Bind policies and requests
    immutably. Demonstrate cascading revocation during concurrent requests and
-   define the authorization-to-execution race semantics.
+   define the authorization-to-execution race semantics. Authenticate reviewers
+   and atomically consume approvals bound to one immutable action, parameter
+   digest, policy version, escalation ID, and current grant.
 4. Persist intent before execution and reconcile completed/failed/unknown outcomes.
    Use idempotency keys for remote side effects, atomic budget reservations, and
    replay protection. Test crash, timeout, duplicate delivery, and partial outage.
