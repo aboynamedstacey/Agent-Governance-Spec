@@ -8,7 +8,7 @@ those controls across agent runtimes through shared contracts, schemas, and
 reference algorithms.
 
 **Current revision: 0.7.0-draft.** Includes a Python reference implementation,
-174 passing tests (with 13 stateful vector definitions skipped), and an executable local tool workflow.
+180 passing tests (with 13 stateful vector definitions skipped), and an executable local tool workflow.
 
 ## Design
 
