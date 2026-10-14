@@ -182,7 +182,7 @@ PolicyScope {
 ### Subset Relation
 
 Scope A is a **subset** of Scope B if and only if:
-1. Every action pattern in A matches a subset of the actions matched by B's patterns.
+1. Every effective first-match decision in A refines B under D.3, preserving exceptions, rule-local constraints, failure branches, and escalation controls. Pattern coverage alone is insufficient.
 2. Every resource constraint in A is equal to or more restrictive than the corresponding constraint in B.
 3. Every parameter constraint in A is equal to or more restrictive than the corresponding constraint in B.
 4. A's output policy is equal to or more restrictive than B's output policy.
@@ -343,7 +343,7 @@ RateLimit {
 }
 ```
 
-**Rate limit interaction with attenuation:** Attenuated actions count against the rate limit of the **original** action type, not the attenuated form. An action attenuated from read-write to read-only counts against the read-write rate limit. This prevents attenuation from being used to circumvent rate limits.
+**Rate limit interaction with attenuation:** Attenuated actions count against the rate limit of the **original** action type, not the attenuated form. An action with a clamped numeric parameter still counts against the original action type’s rate limit. This prevents attenuation from being used to circumvent rate limits.
 
 ---
 
@@ -710,3 +710,16 @@ ExternalAnchor {
 ```
 
 Implementations SHOULD support external anchoring. Publishing chain head hashes to an independent timestamping service at regular intervals allows detection of wholesale chain replacement, an attack that a self-contained hash chain cannot detect.
+
+## C.11 Verified outcome evidence and lexical assessment
+
+`TrustOutcomeEvidence` in `schemas/types.schema.json` defines the D.6 evidence
+record. All seven string fields are required: evidence_id, action_id,
+observer_id, criterion, agent_id, capability, outcome. Outcomes are
+VERIFIED_SUCCESS, VERIFIED_FAILURE, or TAMPER. Authentication and binding to an
+immutable execution/outcome record occur before calling the reference scorer.
+
+`LexicalOutputAssessment` defines D.8's internal assessment (not a release
+authorization). It includes scope_alignment, findings, recommendation, method,
+assessment_scope=lexical_only, and semantic_assurance=false. The delivery gate
+maps its result to the existing OutputDecision contract as specified in D.8.3.

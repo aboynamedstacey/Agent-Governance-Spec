@@ -21,6 +21,7 @@ Run: python3 reference_algorithms.py
 """
 
 import hashlib
+import rfc8785
 import json
 import re
 import sys
@@ -133,6 +134,10 @@ def evaluate_constraint(field: str, operator: str, value, params: dict,
     # Unresolvable variable → fail-closed
     if target is None and "${" in str(value):
         return False
+
+    if operator in {"LESS_THAN", "LESS_THAN_OR_EQUAL", "GREATER_THAN", "GREATER_THAN_OR_EQUAL"}:
+        if not is_finite_number(actual) or not is_finite_number(target):
+            return False
 
     if operator == "EQUALS":
         return actual == target
@@ -321,6 +326,55 @@ def actions_are_subset(child_patterns: list[str], parent_patterns: list[str]) ->
     return True
 
 
+def rules_are_subset(child_rules: list[dict], parent_rules: list[dict]) -> bool:
+    """Conservatively prove first-match policy refinement, including exceptions.
+
+    Exact/prefix patterns partition the action namespace into finitely many
+    regions. Test every pattern boundary and one fresh descendant per boundary;
+    rule selection is constant inside each remaining region. This is not a
+    sampling heuristic. Unsupported constraint implications fail closed.
+    """
+    rules = child_rules + parent_rules
+    if any(not isinstance(r.get("pattern"), str) or
+           not re.fullmatch(r"\*|[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*(?:\.\*)?", r["pattern"])
+           or r.get("decision") not in {"ALLOW", "DENY", "ESCALATE"}
+           for r in rules):
+        return False
+    segments = {s for r in rules for s in r["pattern"].split(".")}
+    fresh = "__other"
+    while fresh in segments:
+        fresh += "_"
+    representatives = {fresh}
+    for r in rules:
+        if r["pattern"] == "*":
+            continue
+        base = r["pattern"].removesuffix(".*")
+        representatives.update((base, base + "." + fresh))
+
+    def selected(policy, action):
+        return next((r for r in policy if matches(action, r["pattern"])), None)
+
+    for action in representatives:
+        child = selected(child_rules, action)
+        parent = selected(parent_rules, action)
+        if child is None or (child["decision"] == "DENY" and
+                             child.get("on_constraint_fail") in (None, "DENY")):
+            continue
+        if parent is None or child["decision"] != parent["decision"]:
+            return False
+        if child.get("escalation") != parent.get("escalation"):
+            return False
+        cc, pc = child.get("constraints", []), parent.get("constraints", [])
+        if child.get("on_constraint_fail") != parent.get("on_constraint_fail"):
+            return False
+        # A changed predicate with a permissive failure branch can add authority.
+        if child.get("on_constraint_fail") not in (None, "DENY") and cc != pc:
+            return False
+        if not constraints_are_tighter(cc, pc):
+            return False
+    return True
+
+
 def constraint_is_at_least_as_restrictive(child: dict, parent: dict) -> bool:
     """
     Step 2: Determine whether a child constraint is at least as restrictive
@@ -328,11 +382,19 @@ def constraint_is_at_least_as_restrictive(child: dict, parent: dict) -> bool:
     """
     if child["field"] != parent["field"]:
         return False
+    # Identity-relative variables may resolve differently for a child. Resolve
+    # and bind them to immutable literals before requesting delegation.
+    if "${" in json.dumps([child, parent]):
+        return False
 
     cop = child["operator"]
     pop = parent["operator"]
     cv = child["value"]
     pv = parent["value"]
+
+    ranges = {"LESS_THAN", "LESS_THAN_OR_EQUAL", "GREATER_THAN", "GREATER_THAN_OR_EQUAL"}
+    if (cop in ranges or pop in ranges) and not (is_finite_number(cv) and is_finite_number(pv)):
+        return False
 
     # Same operator — compare values
     if cop == pop:
@@ -395,15 +457,15 @@ def resource_constraints_are_subset(child_resources: list[dict],
     if not parent_resources:
         return len(child_resources) == 0
 
-    access_order = {"ACCESS_READ": 0, "ACCESS_WRITE": 1, "ACCESS_DELETE": 2, "ACCESS_EXECUTE": 3}
-
     for cr in child_resources:
         covered = False
         for pr in parent_resources:
-            if matches(cr.get("resource_pattern", ""), pr.get("resource_pattern", "")):
-                child_level = access_order.get(cr.get("access_level", ""), 99)
-                parent_level = access_order.get(pr.get("access_level", ""), 99)
-                if child_level <= parent_level:
+            if pattern_covers(pr.get("resource_pattern", ""), cr.get("resource_pattern", "")):
+                # Access operations are distinct permissions, not a privilege ladder.
+                if (cr.get("access_level") == pr.get("access_level")
+                        and cr.get("access_level") in {"ACCESS_READ", "ACCESS_WRITE", "ACCESS_DELETE", "ACCESS_EXECUTE"}
+                        and cr.get("classification_max") == pr.get("classification_max")
+                        and cr.get("conditions", []) == pr.get("conditions", [])):
                     covered = True
                     break
         if not covered:
@@ -422,9 +484,8 @@ def is_subset(child_scope: dict, parent_scope: dict) -> bool:
     All five steps must pass.
     """
     # Step 1: Action coverage
-    child_actions = [r["pattern"] for r in child_scope.get("authorized_actions", [])]
-    parent_actions = [r["pattern"] for r in parent_scope.get("authorized_actions", [])]
-    if not actions_are_subset(child_actions, parent_actions):
+    if not rules_are_subset(child_scope.get("authorized_actions", []),
+                            parent_scope.get("authorized_actions", [])):
         return False
 
     # Step 2: Constraint tightness
@@ -454,6 +515,11 @@ def is_subset(child_scope: dict, parent_scope: dict) -> bool:
         if not parent_output:
             return False
         if not output_types_are_subset(child_output, parent_output):
+            return False
+
+    # Preserve output controls whose implication relation is not standardized.
+    for key, value in parent_scope.get("output_policy", {}).items():
+        if key != "authorized_output_types" and child_scope.get("output_policy", {}).get(key) != value:
             return False
 
     return True
@@ -566,30 +632,13 @@ def canonical_value(value) -> str:
 
 
 def canonical_entry_string(entry: dict) -> str:
-    """
-    Produce a canonical JSON serialization of an audit entry for hashing.
-    Excludes chain_hash. Follows RFC 8785 (JSON Canonicalization Scheme, JCS)
-    principles: lexicographically sorted keys (recursively), no whitespace,
-    UTF-8, standard JSON escaping.
+    """RFC 8785 canonicalization, including numbers and UTF-16 key order.
 
-    Python's json.dumps with sort_keys=True, ensure_ascii=False, and compact
-    separators produces RFC 8785-equivalent output for audit entries whose
-    values are strings, integers, booleans, nulls, or arrays/objects of these.
-    Full RFC 8785 number normalization (ES6 ToString for floats) is not
-    required by this specification; audit entries should use integer numeric
-    values to avoid the edge case.
-
-    This ensures any field change — decision, reason, outcome, policy_version,
-    trust_state, causal_parent — breaks the chain.
+    Invalid I-JSON values fail closed (NaN, infinities, unsafe integers, lone
+    surrogates). A conforming audit adapter must normalize or reject its input.
     """
     filtered = {k: v for k, v in entry.items() if k != "chain_hash"}
-    return json.dumps(
-        filtered,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    return rfc8785.dumps(filtered).decode("utf-8")
 
 
 def hash_entry(algorithm: str, prev_hash: str, entry: dict) -> str:
@@ -677,9 +726,8 @@ TRUST_MAX = 1.0
 
 # Event-driven deltas. Slow to gain, faster to lose.
 TRUST_DELTAS = {
-    "ALLOW": +0.02,
-    "DENY": -0.05,
-    "ESCALATE": -0.03,
+    "VERIFIED_SUCCESS": +0.02,
+    "VERIFIED_FAILURE": -0.05,
 }
 TRUST_TAMPER_RESET = 0.0
 
@@ -699,11 +747,11 @@ def clamp_trust(score: float) -> float:
 
 def init_trust_state() -> dict:
     """Create an empty trust state container."""
-    return {"scores": {}, "events": {}}
+    return {"scores": {}, "events": {}, "evidence": {}, "credited_actions": set(), "quarantined": set()}
 
 
 def _trust_key(agent_id: str, capability: str) -> str:
-    return f"{agent_id}::{capability}"
+    return json.dumps([agent_id, capability], separators=(",", ":"))
 
 
 def get_trust(state: dict, agent_id: str, capability: str) -> float:
@@ -711,24 +759,42 @@ def get_trust(state: dict, agent_id: str, capability: str) -> float:
     return state["scores"].get(_trust_key(agent_id, capability), TRUST_INITIAL)
 
 
-def update_trust(state: dict, agent_id: str, capability: str, event_type: str) -> float:
-    """
-    Apply a governance event to the trust score for (agent, capability).
-    Returns the updated score.
+def update_trust(state: dict, agent_id: str, capability: str, event_type: str,
+                 evidence: dict | None = None) -> float:
+    """Consume observer-verified outcomes, never infer quality from permission.
 
-    event_type is one of: 'ALLOW', 'DENY', 'ESCALATE', 'TAMPER'.
-    Other event types are ignored (trust is not affected).
+    Caller is the authenticated governance observer, not the agent. Evidence
+    references an immutable outcome record; this function validates structure
+    and replay, not the observer's identity or the truth of the outcome.
     """
     key = _trust_key(agent_id, capability)
     current = state["scores"].get(key, TRUST_INITIAL)
-
+    if event_type in {"ALLOW", "DENY", "ESCALATE", "ATTENUATE"}:
+        return current
+    if event_type not in {*TRUST_DELTAS, "TAMPER"}:
+        raise ValueError("Unknown outcome event")
+    required = ("evidence_id", "action_id", "observer_id", "criterion", "agent_id", "capability", "outcome")
+    if not isinstance(evidence, dict) or any(not isinstance(evidence.get(k), str) or not evidence[k] for k in required):
+        raise ValueError("Verified outcome evidence is required")
+    if (evidence["agent_id"], evidence["capability"], evidence["outcome"]) != (agent_id, capability, event_type):
+        raise ValueError("Evidence does not match subject or outcome")
+    eid = evidence["evidence_id"]
+    if eid in state["evidence"]:
+        if state["evidence"][eid] != evidence:
+            raise ValueError("Conflicting evidence replay")
+        return current
+    state["evidence"][eid] = dict(evidence)
+    # One credit/debit per action and outcome even under a fresh evidence ID.
+    credit_key = (agent_id, capability, evidence["action_id"], event_type)
+    if credit_key in state["credited_actions"]:
+        return current
+    state["credited_actions"].add(credit_key)
     if event_type == "TAMPER":
-        new_score = TRUST_TAMPER_RESET
-    elif event_type in TRUST_DELTAS:
-        new_score = clamp_trust(current + TRUST_DELTAS[event_type])
+        state["quarantined"].add(key)
+    if key in state["quarantined"]:
+        new_score = 0.0
     else:
-        new_score = current
-
+        new_score = clamp_trust(current + TRUST_DELTAS[event_type])
     state["scores"][key] = new_score
     state["events"].setdefault(key, []).append(event_type)
     return new_score
@@ -736,15 +802,14 @@ def update_trust(state: dict, agent_id: str, capability: str, event_type: str) -
 
 def decay_trust(state: dict, ticks: int = 1) -> None:
     """
-    Decay all trust scores toward the neutral midpoint (0.5) over `ticks`
-    units of inactivity. Scores above 0.5 decay down; scores below decay up.
+    Decay positive trust toward 0.5 over declared inactivity ticks.
+    Adverse scores and quarantine never recover merely through inactivity.
     """
     for _ in range(ticks):
         for key, score in state["scores"].items():
             if score > TRUST_INITIAL:
                 state["scores"][key] = max(TRUST_INITIAL, score - TRUST_DECAY_RATE)
-            elif score < TRUST_INITIAL:
-                state["scores"][key] = min(TRUST_INITIAL, score + TRUST_DECAY_RATE)
+            # Inactivity never repairs adverse evidence or clears quarantine.
 
 
 def scrutiny_tier(trust_score: float) -> str:
@@ -797,68 +862,25 @@ def is_mutating_action(action_type: str) -> bool:
 
 
 def tier3_evaluate(agent_id: str, action_type: str, capability: str,
-                   trust_state: dict) -> dict:
-    """
-    Evaluate Tier 3 for an action. Callers MUST honor the Tier 1 → Tier 2
-    → Tier 3 order; this function assumes Tier 1 and 2 did not resolve.
+                   trust_state: dict, *, authority_confirmed: bool = False,
+                   action_effect: str | None = None) -> dict:
+    """Scrutiny routing after authority checks, using trusted tool metadata.
 
-    Returns a decision dict with keys: decision, reason, tier, trust, scrutiny.
-    decision is one of 'ALLOW', 'DENY', 'ESCALATE', 'ATTENUATE'.
+    Missing authority proof or unknown effects escalate. Lexical action names
+    are never evidence that a tool is read-only. No implicit write-to-read
+    conversion exists: low-trust writes escalate for an explicit decision.
     """
     trust = get_trust(trust_state, agent_id, capability)
     scrutiny = scrutiny_tier(trust)
-
-    escalate_count = recent_event_count(
-        trust_state, agent_id, capability, "ESCALATE", TIER3_WINDOW
-    )
-
-    if escalate_count > TIER3_ESCALATE_THRESHOLD:
-        return {
-            "decision": "ESCALATE",
-            "reason": f"recent_escalates={escalate_count} exceeds threshold "
-                      f"{TIER3_ESCALATE_THRESHOLD} in window of {TIER3_WINDOW}",
-            "tier": 3,
-            "trust": trust,
-            "scrutiny": scrutiny,
-        }
-
-    mutating = is_mutating_action(action_type)
-
-    if scrutiny == "high":
-        if mutating:
-            return {
-                "decision": "ATTENUATE",
-                "reason": f"trust={trust:.2f} below high-scrutiny threshold; "
-                          f"mutating action attenuated",
-                "tier": 3,
-                "trust": trust,
-                "scrutiny": scrutiny,
-            }
-        return {
-            "decision": "ALLOW",
-            "reason": f"trust={trust:.2f} low but action is read-only",
-            "tier": 3,
-            "trust": trust,
-            "scrutiny": scrutiny,
-        }
-
-    if scrutiny == "normal":
-        return {
-            "decision": "ALLOW",
-            "reason": f"trust={trust:.2f} within normal range",
-            "tier": 3,
-            "trust": trust,
-            "scrutiny": scrutiny,
-            "audit_flag": True,
-        }
-
-    return {
-        "decision": "ALLOW",
-        "reason": f"trust={trust:.2f} in fast-path range",
-        "tier": 3,
-        "trust": trust,
-        "scrutiny": scrutiny,
-    }
+    base = {"tier": 3, "trust": trust, "scrutiny": scrutiny}
+    if _trust_key(agent_id, capability) in trust_state.get("quarantined", set()):
+        return dict(base, decision="DENY", reason="quarantined")
+    if not authority_confirmed or action_effect not in {"read", "write"}:
+        return dict(base, decision="ESCALATE", reason="authority_or_effect_unverified")
+    failures = recent_event_count(trust_state, agent_id, capability, "VERIFIED_FAILURE", 10)
+    if failures > 3 or (scrutiny == "high" and action_effect == "write"):
+        return dict(base, decision="ESCALATE", reason="verified_adverse_outcomes")
+    return dict(base, decision="ALLOW", reason="within_authority", audit_flag=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -968,6 +990,8 @@ def evaluate_output_keyword_overlap(output: str, task_keywords: list,
         "findings": findings,
         "recommendation": _recommend(alignment, findings),
         "method": "keyword_overlap",
+        "assessment_scope": "lexical_only",
+        "semantic_assurance": False,
     }
 
 
@@ -1036,7 +1060,23 @@ def evaluate_output_slot_match(output: str, task_declaration: dict,
         "findings": findings,
         "recommendation": _recommend(alignment, findings),
         "method": "slot_match",
+        "assessment_scope": "lexical_only",
+        "semantic_assurance": False,
     }
+
+
+def output_delivery_decision(evaluation: dict, *, high_risk: bool = True) -> str:
+    """Fail-closed delivery routing; a lexical PASS cannot release high-risk text.
+
+    Human/semantic review is a separate authenticated workflow bound to the
+    exact output and task. This helper accepts no agent-supplied review bypass.
+    """
+    if evaluation.get("recommendation") == "BLOCK":
+        return "BLOCK"
+    if (evaluation.get("recommendation") != "PASS" or evaluation.get("findings")
+            or high_risk or evaluation.get("assessment_scope") != "lexical_only"):
+        return "REVIEW"
+    return "DELIVER"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1072,6 +1112,16 @@ def run_tests():
                     failed += 1
                     print(f"    [FAIL] {test['id']}: {test['description']}")
                     print(f"           Expected: {test['expected']}, Got: {result}")
+
+        elif suite["suite"] == "delegation_semantics":
+            for test in suite["tests"]:
+                result = is_subset(test["child_scope"], test["parent_scope"])
+                if result == test["expected"]:
+                    passed += 1
+                    print(f"    [PASS] {test['id']}: {test['description']}")
+                else:
+                    failed += 1
+                    print(f"    [FAIL] {test['id']}: expected {test['expected']}, got {result}")
 
         elif suite["suite"] == "scope_subset":
             for test in suite["tests"]:
@@ -1190,54 +1240,54 @@ def run_tests():
 
     scope_tests = [
         ("FS-001", "Identical full scopes are subsets",
-         {"authorized_actions": [{"pattern": "db.*"}],
+         {"authorized_actions": [{"pattern": "db.*", "decision": "ALLOW"}],
           "parameter_constraints": [{"field": "limit", "operator": "LESS_THAN_OR_EQUAL", "value": 100}],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [{"resource_pattern": "db-prod", "access_level": "ACCESS_READ"}],
           "output_policy": {"authorized_output_types": ["INTERNAL_SUMMARY"]}},
-         {"authorized_actions": [{"pattern": "db.*"}],
+         {"authorized_actions": [{"pattern": "db.*", "decision": "ALLOW"}],
           "parameter_constraints": [{"field": "limit", "operator": "LESS_THAN_OR_EQUAL", "value": 100}],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [{"resource_pattern": "db-prod", "access_level": "ACCESS_READ"}],
           "output_policy": {"authorized_output_types": ["INTERNAL_SUMMARY"]}},
          True),
         ("FS-002", "Child with tighter constraints is subset",
-         {"authorized_actions": [{"pattern": "db.query"}],
+         {"authorized_actions": [{"pattern": "db.query", "decision": "ALLOW"}],
           "parameter_constraints": [{"field": "limit", "operator": "LESS_THAN_OR_EQUAL", "value": 50}],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [], "output_policy": {"authorized_output_types": []}},
-         {"authorized_actions": [{"pattern": "db.*"}],
+         {"authorized_actions": [{"pattern": "db.*", "decision": "ALLOW"}],
           "parameter_constraints": [{"field": "limit", "operator": "LESS_THAN_OR_EQUAL", "value": 100}],
           "delegation": {"can_delegate": True, "max_depth": 2},
           "resource_constraints": [], "output_policy": {"authorized_output_types": []}},
          True),
         ("FS-003", "Child with looser constraints is NOT subset",
-         {"authorized_actions": [{"pattern": "db.query"}],
+         {"authorized_actions": [{"pattern": "db.query", "decision": "ALLOW"}],
           "parameter_constraints": [{"field": "limit", "operator": "LESS_THAN_OR_EQUAL", "value": 200}],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [], "output_policy": {"authorized_output_types": []}},
-         {"authorized_actions": [{"pattern": "db.*"}],
+         {"authorized_actions": [{"pattern": "db.*", "decision": "ALLOW"}],
           "parameter_constraints": [{"field": "limit", "operator": "LESS_THAN_OR_EQUAL", "value": 100}],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [], "output_policy": {"authorized_output_types": []}},
          False),
         ("FS-004", "Child requesting delegation when parent disallows it",
-         {"authorized_actions": [{"pattern": "db.query"}],
+         {"authorized_actions": [{"pattern": "db.query", "decision": "ALLOW"}],
           "parameter_constraints": [],
           "delegation": {"can_delegate": True, "max_depth": 1},
           "resource_constraints": [], "output_policy": {"authorized_output_types": []}},
-         {"authorized_actions": [{"pattern": "db.*"}],
+         {"authorized_actions": [{"pattern": "db.*", "decision": "ALLOW"}],
           "parameter_constraints": [],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [], "output_policy": {"authorized_output_types": []}},
          False),
         ("FS-005", "Child with additional output types is NOT subset",
-         {"authorized_actions": [{"pattern": "db.query"}],
+         {"authorized_actions": [{"pattern": "db.query", "decision": "ALLOW"}],
           "parameter_constraints": [],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [],
           "output_policy": {"authorized_output_types": ["INTERNAL_SUMMARY", "CUSTOMER_FACING"]}},
-         {"authorized_actions": [{"pattern": "db.*"}],
+         {"authorized_actions": [{"pattern": "db.*", "decision": "ALLOW"}],
           "parameter_constraints": [],
           "delegation": {"can_delegate": False, "max_depth": 0},
           "resource_constraints": [],
@@ -1396,103 +1446,38 @@ def run_tests():
             failed += 1
             print(f"    [FAIL] {tid}: {desc}")
 
+    def evidence(n, agent="a1", cap="cap.read", outcome="VERIFIED_SUCCESS"):
+        return {"evidence_id": f"ev-{n}", "action_id": f"act-{n}", "observer_id": "test-observer",
+                "criterion": "expected-result-v1", "agent_id": agent, "capability": cap, "outcome": outcome}
+
     ts = init_trust_state()
-    _trust_check("TR-001", "Initial trust score is 0.5",
-                 get_trust(ts, "a1", "cap.read") == 0.5)
-
-    update_trust(ts, "a1", "cap.read", "ALLOW")
-    _trust_check("TR-002", "ALLOW event increases trust by 0.02",
-                 abs(get_trust(ts, "a1", "cap.read") - 0.52) < 1e-9)
-
-    for _ in range(50):
-        update_trust(ts, "a1", "cap.read", "ALLOW")
-    _trust_check("TR-003", "Trust is clamped at 1.0 with repeated ALLOWs",
-                 get_trust(ts, "a1", "cap.read") == 1.0)
-
-    ts2 = init_trust_state()
-    for _ in range(30):
-        update_trust(ts2, "a2", "cap.write", "DENY")
-    _trust_check("TR-004", "Trust is clamped at 0.0 with repeated DENYs",
-                 get_trust(ts2, "a2", "cap.write") == 0.0)
-
-    ts3 = init_trust_state()
-    update_trust(ts3, "a3", "cap.x", "ALLOW")
-    update_trust(ts3, "a3", "cap.y", "DENY")
-    _trust_check("TR-005", "Per-capability isolation (same agent, different caps)",
-                 get_trust(ts3, "a3", "cap.x") != get_trust(ts3, "a3", "cap.y"))
-
-    update_trust(ts3, "a3", "cap.x", "TAMPER")
-    _trust_check("TR-006", "TAMPER event drops trust to 0.0",
-                 get_trust(ts3, "a3", "cap.x") == 0.0)
-
-    ts4 = init_trust_state()
-    for _ in range(10):
-        update_trust(ts4, "a4", "cap.z", "ALLOW")
-    before_decay = get_trust(ts4, "a4", "cap.z")
-    decay_trust(ts4, ticks=5)
-    after_decay = get_trust(ts4, "a4", "cap.z")
-    _trust_check("TR-007", "Decay moves above-midpoint score toward 0.5",
-                 after_decay < before_decay and after_decay >= 0.5)
-
-    # ── Tier 3 policy evaluation tests ──
-
-    print(f"\n  Suite: tier3_evaluation")
-    print(f"  Policy Gate Tier 3 behavioral evaluation (Appendix D.7)")
-    print()
-
-    def _t3_check(tid, desc, ok, got=None):
-        nonlocal passed, failed
-        if ok:
-            passed += 1
-            print(f"    [PASS] {tid}: {desc}")
-        else:
-            failed += 1
-            extra = f" (got {got!r})" if got is not None else ""
-            print(f"    [FAIL] {tid}: {desc}{extra}")
-
-    # Fast path: high trust → ALLOW
-    ts_high = init_trust_state()
-    for _ in range(20):
-        update_trust(ts_high, "a1", "gmail.drafts", "ALLOW")
-    r = tier3_evaluate("a1", "gmail.drafts.create", "gmail.drafts", ts_high)
-    _t3_check("T3-001", "High trust yields ALLOW in fast-path",
-              r["decision"] == "ALLOW" and r["scrutiny"] == "fast", r)
-
-    # Normal trust: mid-range → ALLOW with audit flag
-    ts_mid = init_trust_state()
-    r = tier3_evaluate("a2", "gmail.drafts.create", "gmail.drafts", ts_mid)
-    _t3_check("T3-002", "Normal trust yields ALLOW with audit flag",
-              r["decision"] == "ALLOW" and r["scrutiny"] == "normal"
-              and r.get("audit_flag") is True, r)
-
-    # Low trust + mutating → ATTENUATE
-    ts_low = init_trust_state()
-    for _ in range(10):
-        update_trust(ts_low, "a3", "db.records", "DENY")
-    r = tier3_evaluate("a3", "db.records.update", "db.records", ts_low)
-    _t3_check("T3-003", "Low trust on a mutating action yields ATTENUATE",
-              r["decision"] == "ATTENUATE" and r["scrutiny"] == "high", r)
-
-    # Low trust + read-only → ALLOW
-    r = tier3_evaluate("a3", "db.records.read", "db.records", ts_low)
-    _t3_check("T3-004", "Low trust on a read-only action yields ALLOW",
-              r["decision"] == "ALLOW" and r["scrutiny"] == "high", r)
-
-    # Escalation-count threshold → ESCALATE regardless of trust
-    ts_esc = init_trust_state()
-    for _ in range(20):
-        update_trust(ts_esc, "a4", "api.calls", "ALLOW")  # push trust up
-    for _ in range(4):
-        update_trust(ts_esc, "a4", "api.calls", "ESCALATE")
-    r = tier3_evaluate("a4", "api.calls.send", "api.calls", ts_esc)
-    _t3_check("T3-005", "Exceeding escalate threshold forces ESCALATE",
-              r["decision"] == "ESCALATE", r)
-
-    # Mutating verb detection
-    _t3_check("T3-006", "is_mutating_action detects 'update' as mutating",
-              is_mutating_action("db.records.update"))
-    _t3_check("T3-007", "is_mutating_action detects 'read' as non-mutating",
-              not is_mutating_action("db.records.read"))
+    _trust_check("TR-001", "Initial score is neutral", get_trust(ts, "a1", "cap.read") == 0.5)
+    for event in ("ALLOW", "DENY", "ESCALATE"):
+        update_trust(ts, "a1", "cap.read", event)
+    _trust_check("TR-002", "Permission decisions are neutral", get_trust(ts, "a1", "cap.read") == 0.5)
+    for n in range(50):
+        update_trust(ts, "a1", "cap.read", "VERIFIED_SUCCESS", evidence(n))
+    _trust_check("TR-003", "Verified successes clamp at 1", get_trust(ts, "a1", "cap.read") == 1.0)
+    for n in range(30):
+        update_trust(ts, "a2", "cap.write", "VERIFIED_FAILURE", evidence(100+n, "a2", "cap.write", "VERIFIED_FAILURE"))
+    _trust_check("TR-004", "Verified failures clamp at 0", get_trust(ts, "a2", "cap.write") == 0.0)
+    _trust_check("TR-005", "Capabilities remain isolated", get_trust(ts, "a1", "cap.write") == 0.5)
+    update_trust(ts, "a1", "cap.read", "TAMPER", evidence(200, outcome="TAMPER"))
+    decay_trust(ts, 100)
+    _trust_check("TR-006", "Tamper quarantine survives inactivity", get_trust(ts, "a1", "cap.read") == 0.0)
+    _trust_check("TR-007", "Inactivity cannot repair failures", get_trust(ts, "a2", "cap.write") == 0.0)
+    print("\n  Suite: tier3_evaluation")
+    for tid, kwargs, expected in [
+        ("T3-001", {}, "ESCALATE"),
+        ("T3-002", {"authority_confirmed": True, "action_effect": "write"}, "ALLOW"),
+        ("T3-003", {"authority_confirmed": True}, "ESCALATE"),
+        ("T3-004", {"authority_confirmed": True, "action_effect": "read"}, "ALLOW"),
+    ]:
+        r = tier3_evaluate("new", "arbitrary.name", "cap", init_trust_state(), **kwargs)
+        _trust_check(tid, "Trusted authority and effects required", r["decision"] == expected)
+    _trust_check("T3-005", "Quarantine denies", tier3_evaluate("a1", "x", "cap.read", ts)["decision"] == "DENY")
+    _trust_check("T3-006", "Adverse history escalates writes", tier3_evaluate("a2", "x", "cap.write", ts, authority_confirmed=True, action_effect="write")["decision"] == "ESCALATE")
+    _trust_check("T3-007", "Name heuristics are informational only", not is_mutating_action("bank.withdraw"))
 
     # ── Output evaluator — keyword overlap tests ──
 

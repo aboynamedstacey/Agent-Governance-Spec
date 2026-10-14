@@ -12,6 +12,7 @@ Run: python3 demo.py
 """
 
 import uuid
+from reference_algorithms import is_subset, matches
 import hashlib
 import json
 from datetime import datetime, timedelta
@@ -73,18 +74,19 @@ class PolicyScope:
     output_types: list = field(default_factory=list)
 
     def is_subset_of(self, parent: "PolicyScope") -> bool:
-        for action in self.allowed_actions:
-            if not any(self._matches(action, p) for p in parent.delegatable_actions):
-                return False
-        return True
+        def scope(value, actions):
+            return {"authorized_actions": [
+                {"pattern": pattern, "decision": decision.value,
+                 "constraints": value.constraints.get(pattern, [])}
+                for pattern, decision in actions.items()],
+                "delegation": {"can_delegate": value.can_delegate,
+                               "max_depth": value.max_delegation_depth},
+                "output_policy": {"authorized_output_types": value.output_types}}
+        child = scope(self, self.allowed_actions)
+        return (is_subset(child, scope(parent, parent.allowed_actions)) and
+                is_subset(child, scope(parent, parent.delegatable_actions)))
 
-    @staticmethod
-    def _matches(action: str, pattern: str) -> bool:
-        if pattern == "*":
-            return True
-        if pattern.endswith(".*"):
-            return action.startswith(pattern[:-2])
-        return action == pattern
+    _matches = staticmethod(matches)
 
 
 @dataclass
@@ -525,33 +527,9 @@ class TrustEngine:
         self.ledger = ledger
 
     def compute_adjustment(self, agent_type: str) -> dict:
-        """Analyze audit history and suggest trust adjustments."""
-        type_entries = [e for e in self.ledger.entries
-                        if e.agent_type == agent_type and e.event_type == "ActionEvaluated"]
-        if not type_entries:
-            return {}
-
-        allowed = sum(1 for e in type_entries if e.decision == "ALLOW")
-        denied = sum(1 for e in type_entries if e.decision == "DENY")
-        total = len(type_entries)
-
-        if total < 5:
-            return {"status": "insufficient_history", "total": total}
-
-        success_rate = allowed / total
-        adjustments = {}
-
-        if success_rate > 0.9:
-            adjustments["recommendation"] = "Consider upgrading data_read to HIGH"
-            adjustments["success_rate"] = success_rate
-        elif success_rate < 0.5:
-            adjustments["recommendation"] = "Consider downgrading trust — high denial rate"
-            adjustments["success_rate"] = success_rate
-        else:
-            adjustments["recommendation"] = "Trust levels appropriate"
-            adjustments["success_rate"] = success_rate
-
-        return adjustments
+        """Permission records alone do not establish outcome quality."""
+        return {"status": "insufficient_outcome_evidence",
+                "recommendation": "Keep trust unchanged until independently verified outcomes exist"}
 
 
 # ─── Simulation Printer ───
@@ -919,12 +897,12 @@ def main():
     print(f"  Audit chain integrity:    {'VERIFIED' if integrity else 'BROKEN'}")
     print(f"  Chain length:             {len(ledger.entries)} entries")
     print()
-    print("  Guarantees demonstrated:")
+    print("  Specification properties illustrated (not deployment guarantees):")
     print("    1. No Bypass          — every action passed through Policy Gate")
     print("    2. Human Origin       — every grant traces to a named human")
     print("    3. Attenuation Only   — child scope was subset of parent delegatable scope")
-    print("    4. Agent Isolation    — agents never saw trust scores or audit entries")
-    print("    5. Credential Isolation — agents referenced resources by name only")
+    print("    4. Agent Isolation    — not tested: this demo runs in one process")
+    print("    5. Credential Isolation — resource-name illustration; no isolated secrets service")
     print("    6. Decision Trace     — every action has full causal chain to human origin")
     print("    7. Tamper Evidence    — SHA-256 chain verified across all entries")
     print("    8. Fail-Closed       — expired/revoked authority → DENY")

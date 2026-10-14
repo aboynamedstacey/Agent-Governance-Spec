@@ -6,8 +6,8 @@ stack: delegation with cascade termination, escalation lifecycle,
 authority expiration, rate limits, damage budgets, escalation timeout,
 and event schema validation.
 
-The GovernanceStack defined here is the minimal conformance-tested
-implementation. It delegates all algorithmic decisions to the canonical
+The GovernanceStack defined here is an in-memory behavioral test fixture,
+not a complete production-conforming implementation. It delegates all algorithmic decisions to the canonical
 functions in reference_algorithms.py. demo.py is a separate illustrative
 walkthrough and is not used by this harness.
 
@@ -15,6 +15,7 @@ Run: python3 simulation/integration_tests.py
 """
 
 import json
+from copy import deepcopy
 import sys
 import uuid
 from datetime import datetime, timedelta
@@ -24,7 +25,7 @@ from typing import Optional
 
 from reference_algorithms import (
     matches, evaluate_rules, evaluate_constraint, is_subset,
-    actions_are_subset, check_rate_limit_sliding,
+    actions_are_subset, rules_are_subset, validate_action_pattern, check_rate_limit_sliding,
     create_genesis, append_to_chain, verify_chain,
 )
 
@@ -61,7 +62,7 @@ class Grant:
         return self.granted_at + timedelta(seconds=self.ttl_seconds)
 
     def is_expired(self, now=None):
-        return (now or datetime.now()) > self.expires_at
+        return (now or datetime.now()) >= self.expires_at
 
     def is_active(self, now=None):
         return not self.terminated and not self.is_expired(now)
@@ -105,9 +106,16 @@ class GovernanceStack:
 
     def create_grant(self, agent_type: str, scope: dict, rules: list[dict],
                      ttl_seconds: int, granted_by: str, **kwargs) -> Grant:
+        if ttl_seconds <= 0 or not granted_by:
+            raise ValueError("A named grantor and positive TTL are required")
+        for rule in rules:
+            validate_action_pattern(rule)
+        declared = scope.get("authorized_actions", [])
+        if not (rules_are_subset(rules, declared) and rules_are_subset(declared, rules)):
+            raise ValueError("Execution rules must match declared authority")
         grant = Grant(
             grant_id=f"grant-{uuid.uuid4().hex[:8]}",
-            agent_type=agent_type, scope=scope, rules=rules,
+            agent_type=agent_type, scope=deepcopy(scope), rules=deepcopy(rules),
             ttl_seconds=ttl_seconds, granted_by=granted_by,
             granted_at=self.now, **kwargs,
         )
@@ -140,11 +148,13 @@ class GovernanceStack:
     # ── Identity Service (uses canonical is_subset) ──
 
     def create_root_identity(self, grant: Grant) -> Identity:
+        if not grant.is_active(self.now):
+            raise ValueError("Cannot create identity from inactive authority")
         iid = f"agent-{uuid.uuid4().hex[:8]}"
         identity = Identity(
             instance_id=iid, agent_type=grant.agent_type,
             parent_id=None, lineage_chain=[iid],
-            scope=grant.scope, rules=grant.rules,
+            scope=deepcopy(grant.scope), rules=deepcopy(grant.rules),
             grant_id=grant.grant_id, created_at=self.now,
             expires_at=grant.expires_at,
         )
@@ -156,6 +166,11 @@ class GovernanceStack:
     def create_child_identity(self, parent: Identity, child_type: str,
                               child_scope: dict,
                               child_rules: list[dict]) -> tuple[Optional[Identity], Optional[str]]:
+        grant = self.grants.get(parent.grant_id)
+        if (not grant or not grant.is_active(self.now) or
+                any(self.identities[i].terminated or self.now >= self.identities[i].expires_at
+                    for i in parent.lineage_chain)):
+            return None, "AUTHORITY_EXPIRED"
         # Check parent can delegate
         parent_deleg = parent.scope.get("delegation", {})
         if not parent_deleg.get("can_delegate", False):
@@ -165,7 +180,7 @@ class GovernanceStack:
 
         # Check delegation depth
         max_depth = parent_deleg.get("max_depth", 0)
-        if len(parent.lineage_chain) > max_depth:
+        if max_depth <= 0:
             self._audit("ActionDenied", parent.instance_id, agent_type=parent.agent_type,
                          detail=f"Delegation depth {len(parent.lineage_chain)} exceeds max {max_depth}",
                          reason="DELEGATION_DEPTH_EXCEEDED")
@@ -178,7 +193,11 @@ class GovernanceStack:
         else:
             parent_scope_for_check = parent.scope
 
-        if not is_subset(child_scope, parent_scope_for_check):
+        declared = child_scope.get("authorized_actions", [])
+        if not (rules_are_subset(child_rules, declared)
+                and rules_are_subset(declared, child_rules)
+                and is_subset(child_scope, parent.scope)
+                and is_subset(child_scope, parent_scope_for_check)):
             self._audit("ActionDenied", parent.instance_id, agent_type=parent.agent_type,
                          detail="Child scope not subset of delegatable scope (full is_subset check)",
                          reason="DELEGATION_SCOPE_VIOLATION")
@@ -189,7 +208,7 @@ class GovernanceStack:
             instance_id=iid, agent_type=child_type,
             parent_id=parent.instance_id,
             lineage_chain=parent.lineage_chain + [iid],
-            scope=child_scope, rules=child_rules,
+            scope=deepcopy(child_scope), rules=deepcopy(child_rules),
             grant_id=parent.grant_id, created_at=self.now,
             expires_at=min(parent.expires_at, self.now + timedelta(hours=1)),
         )
@@ -212,8 +231,23 @@ class GovernanceStack:
 
     # ── Policy Gate (with rate limits and damage budgets) ──
 
+    def _lineage_active(self, identity: Identity) -> bool:
+        """Check that the identity and every ancestor are still registered and active."""
+        if (not identity.lineage_chain or
+                identity.lineage_chain[-1] != identity.instance_id or
+                self.identities.get(identity.instance_id) is not identity):
+            return False
+        for ancestor_id in identity.lineage_chain:
+            ancestor = self.identities.get(ancestor_id)
+            if (ancestor is None or ancestor.terminated or
+                    ancestor.grant_id != identity.grant_id or
+                    self.now >= ancestor.expires_at):
+                return False
+        return True
+
     def evaluate(self, identity: Identity, action_type: str,
-                 params: dict = None) -> tuple[str, int, Optional[str]]:
+                 params: dict = None, *, enqueue_escalation: bool = True,
+                 record_action: bool = True) -> tuple[str, int, Optional[str]]:
         params = params or {}
 
         if identity.terminated:
@@ -232,7 +266,7 @@ class GovernanceStack:
                          action=action_type, reason=reason)
             return "DENY", 1, reason
 
-        if self.now > identity.expires_at:
+        if not self._lineage_active(identity):
             self._audit("ActionDenied", identity.instance_id,
                          agent_type=identity.agent_type,
                          action=action_type, reason="IDENTITY_EXPIRED")
@@ -277,6 +311,12 @@ class GovernanceStack:
                                      detail=f"{db['metric']}: {accumulated}+{current_value} > {db['threshold']}")
                         return on_exceed, 2, "DAMAGE_BUDGET_EXCEEDED"
 
+        # Global constraints are authority bounds, not advisory metadata.
+        if not all(evaluate_constraint(c["field"], c["operator"], c["value"], params)
+                   for c in identity.scope.get("parameter_constraints", [])):
+            self._audit("ActionDenied", identity.instance_id, action=action_type,
+                        reason="CONSTRAINT_VIOLATION")
+            return "DENY", 2, "CONSTRAINT_VIOLATION"
         # Evaluate against rules (Appendix D.2)
         decision, tier, reason = evaluate_rules(identity.rules, action_type, params)
         self._audit("ActionEvaluated", identity.instance_id,
@@ -285,7 +325,7 @@ class GovernanceStack:
                      reason=reason)
 
         # Record in action log for rate limit / damage budget tracking
-        if decision in ("ALLOW", "ATTENUATE"):
+        if record_action and decision in ("ALLOW", "ATTENUATE"):
             self.action_log.append({
                 "agent_id": identity.instance_id,
                 "agent_type": identity.agent_type,
@@ -294,15 +334,18 @@ class GovernanceStack:
                 "timestamp": self.now,
             })
 
-        if decision == "ESCALATE":
+        if enqueue_escalation and decision == "ESCALATE":
             self.escalation_queue.append({
                 "escalation_id": f"esc-{uuid.uuid4().hex[:8]}",
                 "agent_id": identity.instance_id,
                 "action_type": action_type,
-                "params": params,
+                "params": deepcopy(params),
+                "scope_snapshot": deepcopy(identity.scope),
+                "rules_snapshot": deepcopy(identity.rules),
                 "created_at": self.now,
                 "timeout_seconds": 900,  # 15 minutes default
                 "on_timeout": "DENY",
+                "state": "PENDING",
             })
 
         return decision, tier, reason
@@ -312,45 +355,105 @@ class GovernanceStack:
     def resolve_escalation(self, escalation_id: str, decision: str,
                            justification: str, decider: str,
                            modified_params: dict = None) -> dict:
-        esc = next((e for e in self.escalation_queue if e["escalation_id"] == escalation_id), None)
+        """Resolve a pending review without treating approval as tool execution.
+
+        In this in-memory fixture there is no execution authorization token or
+        atomic external side-effect commit. Callers must not execute from this
+        return value. A production boundary must recheck the approved request,
+        grant and policy at the moment of execution.
+        """
+        esc = next((e for e in self.escalation_queue
+                    if e["escalation_id"] == escalation_id), None)
         if not esc:
             return {"error": "Escalation not found"}
+        if esc.get("state") != "PENDING":
+            return {"error": "Escalation already resolved"}
+        if decision not in {"APPROVE", "DENY", "MODIFY"}:
+            return {"error": "Invalid escalation decision"}
+        if (not isinstance(justification, str) or not justification.strip() or
+                not isinstance(decider, str) or not decider.strip()):
+            return {"error": "Identified reviewer and justification required"}
+        if (decision == "MODIFY" and not isinstance(modified_params, dict)) or (
+                decision != "MODIFY" and modified_params is not None):
+            return {"error": "Modified parameters required only for MODIFY"}
+        if self.now >= esc["created_at"] + timedelta(seconds=esc["timeout_seconds"]):
+            self.timeout_escalation(escalation_id)
+            return {"escalation_id": escalation_id, "decision": "DENY",
+                    "reason": "ESCALATION_TIMEOUT"}
 
+        identity = self.identities.get(esc["agent_id"])
+        approved = False
+        reason = "REVIEW_DENIED"
+        requested_params = (deepcopy(modified_params) if decision == "MODIFY"
+                            else deepcopy(esc["params"]))
+
+        if decision in {"APPROVE", "MODIFY"}:
+            grant = self.grants.get(identity.grant_id) if identity else None
+            if not identity or not grant or not grant.is_active(self.now) or not self._lineage_active(identity):
+                reason = "AUTHORITY_INACTIVE"
+            elif (identity.scope != esc["scope_snapshot"] or
+                  identity.rules != esc["rules_snapshot"]):
+                reason = "POLICY_CHANGED"
+            else:
+                # Full gate re-evaluation: expiration, ancestors, global
+                # constraints, rate/damage limits, and ordered action rules.
+                # It must not enqueue another escalation or count a
+                # not-yet-executed action as completed.
+                current, _, gate_reason = self.evaluate(
+                    identity, esc["action_type"], requested_params,
+                    enqueue_escalation=False, record_action=False)
+                if decision == "MODIFY":
+                    approved = current == "ALLOW"
+                else:
+                    # Review can resolve an explicit ESCALATE rule. It cannot
+                    # override DENY, failed rule-local caps, or an escalation
+                    # caused by a damage budget or failed ALLOW constraint.
+                    rule = next((r for r in identity.rules
+                                 if matches(esc["action_type"], r["pattern"])), None)
+                    approved = (
+                        current == "ESCALATE" and
+                        gate_reason in (None, "ESCALATION_REQUIRED") and
+                        rule is not None and rule["decision"] == "ESCALATE" and
+                        all(evaluate_constraint(c["field"], c["operator"],
+                                                c["value"], requested_params)
+                            for c in rule.get("constraints", [])))
+                reason = ("REVIEW_APPROVED" if approved else
+                          "POLICY_NOT_SATISFIED" if decision == "APPROVE" and
+                          gate_reason == "ESCALATION_REQUIRED" else
+                          gate_reason or "POLICY_NOT_SATISFIED")
+
+        esc["state"] = "APPROVED" if approved else "DENIED"
+        esc["resolved_at"] = self.now
+        esc["resolution_params"] = deepcopy(requested_params) if approved else None
         self._audit("EscalationResolved", esc["agent_id"],
-                     action=esc["action_type"],
-                     detail=f"{decision} by {decider}: {justification}")
-
-        if decision == "APPROVE":
-            self._audit("ActionExecuted", esc["agent_id"],
-                         action=esc["action_type"], detail="Executed after escalation approval")
-
-        if decision == "MODIFY" and modified_params:
-            identity = self.identities.get(esc["agent_id"])
-            if identity:
-                d, t, r = evaluate_rules(identity.rules, esc["action_type"], modified_params)
-                self._audit("ActionEvaluated", esc["agent_id"],
-                             agent_type=identity.agent_type,
-                             action=esc["action_type"], decision=d, tier=t, reason=r,
-                             detail="Re-evaluation after MODIFY")
-                if d == "ALLOW":
-                    self._audit("ActionExecuted", esc["agent_id"],
-                                 action=esc["action_type"],
-                                 detail="Executed after MODIFY re-evaluation")
-
-        return {"escalation_id": escalation_id, "decision": decision}
+                    action=esc["action_type"], decision=decision,
+                    reason=reason, decider=decider,
+                    justification=justification, escalation_id=escalation_id,
+                    detail="Approval is not execution")
+        return {"escalation_id": escalation_id,
+                "decision": decision if approved else "DENY",
+                "status": "APPROVED_PENDING_EXECUTION" if approved else "DENIED",
+                "reason": reason}
 
     def timeout_escalation(self, escalation_id: str) -> dict:
-        """Apply timeout behavior when human does not respond."""
-        esc = next((e for e in self.escalation_queue if e["escalation_id"] == escalation_id), None)
+        """Apply the fail-closed timeout exactly once, at or after its deadline."""
+        esc = next((e for e in self.escalation_queue
+                    if e["escalation_id"] == escalation_id), None)
         if not esc:
             return {"error": "Escalation not found"}
-
-        applied_decision = esc.get("on_timeout", "DENY")
+        if esc.get("state") != "PENDING":
+            return {"error": "Escalation already resolved"}
+        if self.now < esc["created_at"] + timedelta(seconds=esc["timeout_seconds"]):
+            return {"error": "Escalation has not timed out"}
+        esc["state"] = "TIMED_OUT"
+        esc["resolved_at"] = self.now
+        # The local fixture never auto-approves a timed-out operation.
         self._audit("EscalationTimedOut", esc["agent_id"],
-                     action=esc["action_type"],
-                     detail=f"Timed out after {esc['timeout_seconds']}s, applied: {applied_decision}",
-                     decision=applied_decision)
-        return {"escalation_id": escalation_id, "applied_decision": applied_decision}
+                    action=esc["action_type"],
+                    escalation_id=escalation_id,
+                    detail=f"Timed out after {esc['timeout_seconds']}s",
+                    decision="DENY")
+        return {"escalation_id": escalation_id, "applied_decision": "DENY"}
 
     def promote_candidate_rule(self, proposer: str, approver: str) -> tuple[bool, str]:
         if proposer == approver:
@@ -366,7 +469,9 @@ class GovernanceStack:
         entry = {"entry_id": entry_id, "event_type": event_type,
                  "agent_id": agent_id, "timestamp": self.now, **kwargs}
         self.audit.append(entry)
-        append_to_chain(self.chain, "SHA256", self.genesis, entry_id, event_type, agent_id)
+        payload = {"timestamp": self.now.isoformat(), **kwargs}
+        append_to_chain(self.chain, "SHA256", self.genesis, entry_id, event_type, agent_id,
+                        **payload)
 
 
 def _resolve_dot(path: str, obj: dict):
@@ -436,14 +541,14 @@ def run_integration_tests():
     ]
 
     research_scope = {
-        "authorized_actions": [{"pattern": p["pattern"]} for p in research_rules],
+        "authorized_actions": deepcopy(research_rules),
         "delegation": {
             "can_delegate": True,
             "max_depth": 2,
             "delegatable_scope": {
                 "authorized_actions": [
-                    {"pattern": "database.query"},
-                    {"pattern": "api.external.get"},
+                    {"pattern": "database.query", "decision": "ALLOW"},
+                    {"pattern": "api.external.get", "decision": "ALLOW"},
                 ],
                 "parameter_constraints": [],
                 "resource_constraints": [],
@@ -466,7 +571,7 @@ def run_integration_tests():
         {"pattern": "api.external.get", "decision": "ALLOW", "constraints": []},
     ]
     child_scope = {
-        "authorized_actions": [{"pattern": "database.query"}, {"pattern": "api.external.get"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}, {"pattern": "api.external.get", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -478,7 +583,7 @@ def run_integration_tests():
     # DL-002: Child requesting action not in delegatable scope
     bad_rules = [{"pattern": "database.write", "decision": "ALLOW", "constraints": []}]
     bad_scope = {
-        "authorized_actions": [{"pattern": "database.write"}],
+        "authorized_actions": [{"pattern": "database.write", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -489,7 +594,7 @@ def run_integration_tests():
 
     # DL-002b: Child with extra output types (tests full is_subset step 5)
     extra_output_scope = {
-        "authorized_actions": [{"pattern": "database.query"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": ["INTERNAL_SUMMARY", "CUSTOMER_FACING"]},
@@ -502,11 +607,11 @@ def run_integration_tests():
     # DL-003: Delegation depth exceeded
     gov2 = GovernanceStack()
     shallow_scope = {
-        "authorized_actions": [{"pattern": p["pattern"]} for p in research_rules],
+        "authorized_actions": deepcopy(research_rules),
         "delegation": {
             "can_delegate": True, "max_depth": 1,
             "delegatable_scope": {
-                "authorized_actions": [{"pattern": "database.query"}],
+                "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
                 "parameter_constraints": [], "resource_constraints": [],
                 "delegation": {"can_delegate": True, "max_depth": 0},
                 "output_policy": {"authorized_output_types": []},
@@ -517,9 +622,9 @@ def run_integration_tests():
     }
     depth_child_rules = [{"pattern": "database.query", "decision": "ALLOW", "constraints": []}]
     depth_child_scope = {
-        "authorized_actions": [{"pattern": "database.query"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
         "delegation": {"can_delegate": True, "max_depth": 0,
-                        "delegatable_scope": {"authorized_actions": [{"pattern": "database.query"}],
+                        "delegatable_scope": {"authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
                                                "parameter_constraints": [], "resource_constraints": [],
                                                "delegation": {"can_delegate": False, "max_depth": 0},
                                                "output_policy": {"authorized_output_types": []}}},
@@ -534,7 +639,7 @@ def run_integration_tests():
           c2 is not None and err2 is None, f"err={err2}")
 
     gc_scope = {
-        "authorized_actions": [{"pattern": "database.query"}],
+        "authorized_actions": [{"pattern": "database.query", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -546,7 +651,7 @@ def run_integration_tests():
     # DL-004: Parent without delegation rights
     gov3 = GovernanceStack()
     no_deleg_scope = {
-        "authorized_actions": [{"pattern": p["pattern"]} for p in research_rules],
+        "authorized_actions": deepcopy(research_rules),
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -576,7 +681,7 @@ def run_integration_tests():
     gov_rl = GovernanceStack()
     rl_rules = [{"pattern": "api.call", "decision": "ALLOW", "constraints": []}]
     rl_scope = {
-        "authorized_actions": [{"pattern": "api.call"}],
+        "authorized_actions": [{"pattern": "api.call", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -605,7 +710,7 @@ def run_integration_tests():
     gov_db = GovernanceStack()
     db_rules = [{"pattern": "payment.send", "decision": "ALLOW", "constraints": []}]
     db_scope = {
-        "authorized_actions": [{"pattern": "payment.send"}],
+        "authorized_actions": [{"pattern": "payment.send", "decision": "ALLOW"}],
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -645,7 +750,7 @@ def run_integration_tests():
         {"pattern": "gmail.messages.send", "decision": "ESCALATE", "constraints": []},
     ]
     email_scope = {
-        "authorized_actions": [{"pattern": "gmail.threads.get"}, {"pattern": "gmail.messages.send"}],
+        "authorized_actions": deepcopy(email_rules),
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -687,11 +792,12 @@ def run_integration_tests():
     check("EL-001a", "Action escalated", d == "ESCALATE")
 
     esc = gov6.escalation_queue[-1]
-    gov6.resolve_escalation(esc["escalation_id"], "APPROVE",
-                             "Verified recipient is authorized", "human:jane@org")
-    check("EL-001b", "Escalation resolved with APPROVE and action executed",
+    approval = gov6.resolve_escalation(esc["escalation_id"], "APPROVE",
+                                       "Verified recipient is authorized", "human:jane@org")
+    check("EL-001b", "Approval does not claim execution",
+          approval.get("status") == "APPROVED_PENDING_EXECUTION" and
           any(e["event_type"] == "EscalationResolved" for e in gov6.audit) and
-          any(e["event_type"] == "ActionExecuted" for e in gov6.audit))
+          not any(e["event_type"] == "ActionExecuted" for e in gov6.audit))
 
     # EL-002: TIMEOUT
     gov_to = GovernanceStack()
@@ -714,11 +820,11 @@ def run_integration_tests():
     write_rules = [
         {"pattern": "database.write", "decision": "ALLOW", "constraints": [
             {"field": "record_count", "operator": "LESS_THAN_OR_EQUAL", "value": 50}
-        ]},
+        ], "on_constraint_fail": "ESCALATE"},
         {"pattern": "database.write_bulk", "decision": "ESCALATE", "constraints": []},
     ]
     write_scope = {
-        "authorized_actions": [{"pattern": "database.write"}, {"pattern": "database.write_bulk"}],
+        "authorized_actions": deepcopy(write_rules),
         "delegation": {"can_delegate": False, "max_depth": 0},
         "parameter_constraints": [], "resource_constraints": [],
         "output_policy": {"authorized_output_types": []},
@@ -727,16 +833,16 @@ def run_integration_tests():
                                 ttl_seconds=3600, granted_by="human:alex@org")
     agent7 = gov7.create_root_identity(grant7)
 
-    d, _, _ = gov7.evaluate(agent7, "database.write_bulk", {"record_count": 100})
-    check("EL-003a", "Bulk write escalated", d == "ESCALATE")
+    d, _, _ = gov7.evaluate(agent7, "database.write", {"record_count": 100})
+    check("EL-003a", "Over-cap write escalated", d == "ESCALATE")
 
     esc7 = gov7.escalation_queue[-1]
-    gov7.resolve_escalation(esc7["escalation_id"], "MODIFY",
-                             "Approved with reduced batch", "human:alex@org",
-                             modified_params={"record_count": 25})
-    re_evals = [e for e in gov7.audit if e["event_type"] == "ActionEvaluated"
-                and "Re-evaluation" in e.get("detail", "")]
-    check("EL-003b", "Modified action re-evaluated", len(re_evals) > 0)
+    modified = gov7.resolve_escalation(esc7["escalation_id"], "MODIFY",
+                                      "Approved with reduced batch", "human:alex@org",
+                                      modified_params={"record_count": 25})
+    check("EL-003b", "Modified action passes full gate without execution",
+          modified.get("status") == "APPROVED_PENDING_EXECUTION" and
+          not any(e["event_type"] == "ActionExecuted" for e in gov7.audit))
 
     # EL-004/005: Separation of duties
     ok, _ = gov7.promote_candidate_rule("human:alice@org", "human:bob@org")
@@ -792,7 +898,6 @@ def run_integration_tests():
                 event_schema["$id"]: event_schema,
                 types_schema["$id"]: types_schema,
             }
-            resolver = jsonschema.RefResolver.from_schema(event_schema, store=schema_store)
 
             # Validate that core event types referenced in the schema are structurally sound
             event_defs = event_schema.get("$defs", {})

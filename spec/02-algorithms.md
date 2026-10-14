@@ -210,98 +210,76 @@ Variable resolution occurs at evaluation time. Unresolvable variables cause the 
 
 ## D.3 Scope Subset Comparison
 
-The Identity Service uses this algorithm to enforce Guarantee 3 (Authority Only Attenuates) during delegation.
+Delegation MUST preserve effective authority under ordered, first-match rules.
+Pattern coverage alone is insufficient: a DENY exception can be hidden by a
+broader ALLOW rule, and an identical action pattern can carry a different cap.
 
-A child scope C is a **subset** of a parent's delegatable scope P if and only if all of the following hold:
+### Rule refinement
 
-### Step 1: Action Coverage
+For every action namespace region, select the first matching rule in each
+policy. A missing child rule or an unconditional child DENY narrows authority.
+Otherwise the parent MUST have a matching rule, and the child MUST preserve:
 
-Every action pattern in C must be covered by at least one pattern in P.
+- The parent's decision, escalation configuration, and `on_constraint_fail`.
+- Every rule-local parameter constraint, identically or more restrictively.
+- Identical constraint predicates when the failure branch is ALLOW or ESCALATE;
+  changing those predicates could widen the permissive branch.
 
-```
-function actions_are_subset(child_actions: ActionPattern[], parent_actions: ActionPattern[]) -> boolean:
-    for child_rule in child_actions:
-        if not any(pattern_covers(parent.pattern, child_rule.pattern) for parent in parent_actions):
-            return false
-    return true
+The reference algorithm `rules_are_subset` partitions exact/prefix patterns
+using every pattern's base action and one fresh descendant per base, plus a
+fresh root action. The fresh segment appears in no policy pattern. First-match
+rule selection is constant within each resulting region, so checking these
+representatives covers the namespace, including exceptions and rule order.
+This construction applies only to exact names, `prefix.*`, and `*`.
+Names comprise dot-delimited nonempty ASCII letters, digits, underscores, or
+hyphens. Unknown decisions, unsupported patterns, and missing decisions fail
+closed. ATTENUATE is a computed outcome, not a delegatable rule decision.
 
-function pattern_covers(parent_pattern: string, child_pattern: string) -> boolean:
-    // parent_pattern covers child_pattern if every action_type matched
-    // by child_pattern would also be matched by parent_pattern.
-    if parent_pattern == "*":
-        return true
-    if parent_pattern == child_pattern:
-        return true
-    if parent_pattern ends with ".*":
-        parent_prefix = parent_pattern without ".*"
-        if child_pattern == parent_prefix:
-            return true
-        if child_pattern starts with (parent_prefix + "."):
-            return true
-        if child_pattern ends with ".*":
-            child_prefix = child_pattern without ".*"
-            return child_prefix starts with (parent_prefix + ".")
-                   OR child_prefix == parent_prefix
-    return false
-```
+This is a conservative proof procedure, not a complete implication solver.
+It may reject a safe but non-comparable policy. Implementers MUST NOT fall back
+to pattern-only authorization when proof fails. `actions_are_subset` remains a
+pattern utility; it MUST NOT be used as the identity service's authorization check.
 
-### Step 2: Constraint Tightness
+### Constraint implication
 
-For each action pattern present in both C and P, every constraint in C must be equal to or more restrictive than the corresponding constraint in P.
+For every parent constraint, a corresponding child constraint MUST prove an
+equal or narrower accepted value set. Same-operator numeric bounds tighten in
+the natural direction; IN lists shrink; NOT_IN lists grow; EQUALS values and
+uninterpreted predicates must remain identical. EQUALS may refine LTE, GTE, or
+IN when its literal value satisfies the parent predicate. Numeric bounds use
+finite JSON numbers and exclude booleans. Unsupported implications fail closed.
 
-```
-function constraints_are_tighter(child_constraints, parent_constraints) -> boolean:
-    // Every parent constraint must have a corresponding child constraint
-    // that is at least as restrictive
-    for pc in parent_constraints:
-        matching_child = find(cc in child_constraints where cc.field == pc.field)
-        if matching_child is null:
-            // Child has no constraint on this field — less restrictive
-            return false
-        if not is_at_least_as_restrictive(matching_child, pc):
-            return false
-    return true
-```
+Identity-relative `${...}` values MUST be resolved and bound to immutable
+literals before delegation comparison. Identical expressions can resolve to
+different values for parent and child and are not evidence of narrowing.
 
-Restrictiveness comparison by operator:
+### Remaining scope fields
 
-| Parent Operator | Child is at least as restrictive if |
-|---|---|
-| LESS_THAN_OR_EQUAL(X) | Child has LESS_THAN_OR_EQUAL(Y) where Y <= X |
-| IN(list) | Child has IN(sublist) where sublist is a subset of list |
-| NOT_IN(list) | Child has NOT_IN(superlist) where superlist is a superset of list |
-| EQUALS(X) | Child has EQUALS(X), same value only |
+- Scope-level parameter constraints use the same implication check.
+- `can_delegate` cannot become true when false in the parent. Child remaining
+  depth is at most `max(0, parent.max_depth - 1)`; actual spawning additionally
+  requires parent `can_delegate=true` and remaining depth greater than zero.
+- Resource permissions form an allowlist. An empty list permits no explicit
+  resource access. Each child resource pattern must be covered by a parent
+  pattern with the **same access operation**, classification ceiling, and
+  conditions. READ, WRITE, DELETE, and EXECUTE do not imply each other.
+  Classification and conditions require equality until an implication model
+  is specified. Tool parameters may carry additional resource restrictions.
+- Child output types must be a subset of parent output types. Other output
+  controls must be preserved exactly until a refinement relation is defined.
 
-### Step 3: Delegation Narrowing
+### Identity-service obligations
 
-```
-function delegation_is_subset(child_delegation, parent_delegation) -> boolean:
-    if child_delegation.can_delegate and not parent_delegation.can_delegate:
-        return false
-    if child_delegation.max_depth > parent_delegation.max_depth - 1:
-        return false   // Each delegation level reduces remaining depth by 1
-    return true
-```
+Both the parent's actual authority and any explicit delegatable envelope MUST
+bound a child's scope. Execution rules MUST be the validated rules, not a
+separately supplied unchecked list. Grant and identity inputs MUST be copied or
+made immutable. A terminated or expired parent or ancestor cannot spawn.
+Expiration is exclusive: at `now >= expires_at`, authority is invalid.
+Delegatable envelopes confer no authority absent from the current identity;
+every subsequent spawn repeats both checks and decrements remaining depth.
 
-### Step 4: Resource Constraints
-
-Every resource constraint in C must be equal to or more restrictive than the corresponding constraint in P (same logic as parameter constraints, applied to resource patterns).
-
-### Step 5: Output Policy
-
-C's authorized output types must be a subset of P's authorized output types.
-
-### Combined Check
-
-```
-function is_subset(child_scope: PolicyScope, parent_scope: PolicyScope) -> boolean:
-    return actions_are_subset(child_scope.authorized_actions, parent_scope.authorized_actions)
-       and constraints_are_tighter(child_scope.parameter_constraints, parent_scope.parameter_constraints)
-       and delegation_is_subset(child_scope.delegation, parent_scope.delegation)
-       and resource_constraints_are_subset(child_scope.resource_constraints, parent_scope.resource_constraints)
-       and set(child_scope.output_policy.authorized_output_types)
-           is subset of set(parent_scope.output_policy.authorized_output_types)
-```
+The `delegation_semantics` vectors cover decision substitution, cap removal,
+ordered exceptions, permissive failure paths, and unresolved identity variables.
 
 ---
 
@@ -406,137 +384,76 @@ The previous design hashed only `{entry_id}|{event_type}|{agent_id}`. Under that
 
 ## D.6 Trust State Management
 
-The Trust Engine is an Extension Profile component. Conforming implementations of the Extension Profile MUST maintain per-`(agent_id, capability)` trust scores in `[0.0, 1.0]` and MUST apply event-driven adjustments identically to the function below.
+The Trust Engine is an Extension Profile. Scores are per `(agent_id, capability)`
+in `[0, 1]`, initially `0.5`. They route scrutiny within existing authority and
+MUST NOT enlarge permissions. The constants below are deterministic reference
+parameters, not empirically calibrated estimates of reliability.
 
-### Trust Model
+### Verified outcomes, not permission decisions
 
-Trust adjusts scrutiny, never authority. A score of 1.0 does not grant permissions. A score of 0.0 does not revoke them. Trust selects the level of evaluation applied within the bounds already established by the Authority Registry.
+| Input | Score effect |
+|---|---|
+| ALLOW, DENY, ESCALATE, ATTENUATE | None |
+| VERIFIED_SUCCESS | +0.02, capped at 1.0 |
+| VERIFIED_FAILURE | -0.05, floored at 0.0 |
+| TAMPER | 0.0 and persistent quarantine |
 
-### State Container
+A successful API response is not by itself VERIFIED_SUCCESS. An authenticated
+observer outside the agent's control must assess the completed action against
+a declared, versioned criterion (for example, correct recipient and correct
+record updates). The immutable evidence record MUST identify `evidence_id`,
+`action_id`, `observer_id`, `criterion`, `agent_id`, `capability`, and `outcome`.
+The subject, capability, and outcome MUST match the requested score update.
+The observer's authentication and access to the outcome record are deployment
+obligations; the Python function validates evidence structure, not authenticity.
 
-```
-TrustState {
-  scores: Map<(agent_id, capability) -> score>,   // score in [0.0, 1.0]
-  events: Map<(agent_id, capability) -> list<event_type>>,  // recent event history
-}
-```
+Replaying identical evidence is idempotent. Reusing an evidence ID with changed
+content is rejected. A new evidence ID cannot credit or debit the same action
+and outcome again. Store evidence references and deduplication state durably
+alongside scores. Serialize updates per subject/capability. Permission events
+must neither change scores nor displace verified outcomes from the history.
 
-### Event-Driven Updates
+Tamper quarantine survives successful outcomes and inactivity. Clearing it
+requires a separate authenticated incident-resolution process and audit entry;
+the reference implementation deliberately supplies no automatic reset.
 
-```
-function update_trust(state, agent_id, capability, event_type):
-    current = state.scores.get((agent_id, capability)) or TRUST_INITIAL
-    if event_type == "TAMPER":
-        new = 0.0
-    else if event_type in { "ALLOW": +0.02, "DENY": -0.05, "ESCALATE": -0.03 }:
-        new = clamp(current + delta(event_type), 0.0, 1.0)
-    else:
-        new = current
-    state.scores[(agent_id, capability)] = new
-    state.events.setdefault((agent_id, capability), []).append(event_type)
-    return new
-```
+### Decay and scrutiny
 
-Design choice: trust gains slowly and loses quickly. A compromised agent that has accumulated high trust can only amplify its blast radius slowly on the way up; the governance layer can revoke it in two or three adverse events.
+Each declared inactivity tick reduces scores above 0.5 by 0.01 toward 0.5.
+Scores at or below 0.5 never increase through inactivity. Operators MUST declare
+the tick duration; portability comparisons must supply the same tick inputs.
 
-### Decay
-
-```
-function decay_trust(state, ticks):
-    for each (agent_cap, score) in state.scores:
-        for i in 1..ticks:
-            if score > 0.5: score = max(0.5, score - 0.01)
-            else if score < 0.5: score = min(0.5, score + 0.01)
-        state.scores[agent_cap] = score
-```
-
-Scores drift toward the midpoint (0.5) with inactivity. Implementations choose the tick rate; the specification does not prescribe one.
-
-### Scrutiny Tier Mapping
-
-```
-function scrutiny_tier(trust_score):
-    if trust_score < 0.3:  return "high"
-    if trust_score < 0.7:  return "normal"
-    return "fast"
-```
-
-The tier label is consumed by Policy Gate Tier 3 (see D.7).
-
-### Initial Conditions
-
-- New `(agent, capability)` pairs start at `TRUST_INITIAL = 0.5` (neutral).
-- Trust state is durable across sessions. Implementations MUST persist `scores` and SHOULD persist `events`.
-- Trust state is a governance-layer artifact and MUST be agent-inaccessible.
+Scores below 0.3 select high scrutiny; below 0.7 select normal scrutiny;
+otherwise select fast scrutiny. These labels are not permissions. Calibration,
+observer quality, task difficulty, and resistance to easy-task farming remain
+requirements for deployment validation. High-impact actions SHOULD retain
+mandatory review regardless of historical score.
 
 ---
 
-## D.7 Policy Gate Tier 3: Behavioral Pattern Analysis
+## D.7 Policy Gate Tier 3: Scrutiny Routing
 
-Tier 3 is an Extension Profile component. Conforming implementations of the Extension Profile MUST run Tier 3 only after Tier 1 (deterministic rule check) and Tier 2 (parameter inspection) have not produced a terminal decision, and MUST produce decisions that are deterministic functions of the declared inputs.
+Tier 3 MUST receive affirmative authority confirmation from Tiers 1-2 and an
+explicit `action_effect` (`read` or `write`) from a trusted tool registry.
+Unknown authority or effects produce ESCALATE. A name such as `read` is not
+proof of an operation's effects. `is_mutating_action` is informational only.
+An unresolved authority decision MUST NOT become ALLOW because trust is high.
 
-### Inputs and Decision Surface
+Apply these rules in order:
 
-```
-function tier3_evaluate(agent_id, action_type, capability, trust_state) -> Decision:
-    // Pre-condition: Tier 1 and Tier 2 produced neither ALLOW nor DENY.
-    //
-    // Returns: Decision { decision, reason, tier: 3, trust, scrutiny }
-    // where decision is one of ALLOW, DENY, ESCALATE, ATTENUATE.
+1. Quarantined agent/capability: DENY.
+2. Authority not confirmed or effect metadata absent/unknown: ESCALATE.
+3. More than three VERIFIED_FAILURE events among the ten most recent verified
+   outcomes, or high scrutiny with a write operation: ESCALATE.
+4. Otherwise: ALLOW within the already-established authority, with an audit flag.
 
-    trust = get_trust(trust_state, agent_id, capability)
-    scrutiny = scrutiny_tier(trust)
-    escalate_count = recent_event_count(trust_state, agent_id, capability,
-                                         "ESCALATE", window = 10)
-
-    // Rule 1: Behavioral escalation pattern overrides trust.
-    if escalate_count > 3:
-        return { decision: ESCALATE, reason: "escalation_pattern", ... }
-
-    mutating = is_mutating_action(action_type)
-
-    // Rule 2: Low trust plus a mutating action → attenuate to read-only.
-    if scrutiny == "high" and mutating:
-        return { decision: ATTENUATE, reason: "low_trust_mutating", ... }
-
-    // Rule 3: Low trust plus read-only action → allow with logging.
-    if scrutiny == "high" and not mutating:
-        return { decision: ALLOW, reason: "low_trust_readonly", ... }
-
-    // Rule 4: Normal trust → allow with audit flag.
-    if scrutiny == "normal":
-        return { decision: ALLOW, audit_flag: true, ... }
-
-    // Rule 5: Fast path.
-    return { decision: ALLOW, reason: "fast_path", ... }
-```
-
-### Mutating Action Detection
-
-An action is mutating if any dot-delimited segment of its `action_type` matches a verb in:
-
-```
-{ create, update, delete, send, execute, publish, transfer, grant }
-```
-
-Implementations MAY extend the verb set. Extensions to this list MUST be documented.
-
-### Behavioral Signals
-
-Tier 3 reads only two signals from trust state:
-
-1. **Trust score** for `(agent_id, capability)`.
-2. **Recent ESCALATE count** over the last 10 events for `(agent_id, capability)`.
-
-This specification does not define additional behavioral signals for Tier 3. Extensions MAY add signals, provided the decision function remains deterministic and signal inputs are auditable.
-
-### Why Deterministic
-
-A Tier 3 that uses machine-learned classifiers, probabilistic scoring, or opaque heuristics produces decisions that cannot be reliably reproduced in an audit. The specification requires Tier 3 to be deterministic so that a decision recorded in the Audit Ledger can be re-derived by an auditor with access to the same inputs.
+There is no automatic conversion of a write into a read. D.2 numeric attenuation
+remains available; other transformations need separately defined semantics.
+Appropriate human escalation is not an adverse outcome and carries no penalty.
 
 ---
 
-## D.8 Output Evaluator: Scope Alignment
+## D.8 Output Evaluator: Lexical Checks and Delivery Control
 
 The Output Evaluator is an Extension Profile component. Two alignment methods are defined. Conforming implementations of the Extension Profile MUST support at least one and MAY support both.
 
@@ -552,7 +469,9 @@ Both methods run the same uniform checks before alignment scoring:
   scope_alignment: float in [0.0, 1.0],
   findings: list of { type, detail, severity in {critical, high, medium} },
   recommendation: "PASS" | "FLAG" | "BLOCK",
-  method: "keyword_overlap" | "slot_match"
+  method: "keyword_overlap" | "slot_match",
+  assessment_scope: "lexical_only",
+  semantic_assurance: false
 }
 ```
 
@@ -624,4 +543,23 @@ Implementations MAY run both methods and combine findings. A call that supplies 
 
 - It does not run a large-language-model classifier against the output. Any ML-based alignment mechanism is an Extension to this Extension Profile.
 - It does not guarantee detection of injection-crafted outputs. Prompt-injection defense at the model layer is out of scope (see Section 1.3).
-- It does not enforce blocking. The `recommendation` field is advisory; the Escalation Router or a downstream enforcement policy decides whether a `BLOCK` recommendation halts delivery.
+- It does not establish semantic scope alignment, factual accuracy, instruction
+  integrity, or correctness. Keyword stuffing may receive PASS.
+- It does not release outputs. The delivery adapter MUST apply the gate below.
+
+### D.8.3 Delivery gate
+
+The reference `output_delivery_decision` returns BLOCK for a BLOCK assessment;
+REVIEW for missing/unknown assessments, any findings, FLAG, or any high-risk
+channel; and DELIVER only for a clean lexical PASS on an explicitly low-risk
+channel. Map BLOCK to SUPPRESS, REVIEW to ESCALATE, and DELIVER to RELEASE in
+`OutputEvaluationResponse`. A lexical PASS alone MUST NOT release high-risk
+outputs. Any downstream human or semantic review must be authenticated, audited,
+and bound to the exact output digest, task, policy, and audience; revisions
+invalidate that approval. The reference gate has no caller-supplied bypass.
+
+Task declarations and channel risk classification MUST originate from trusted
+authority configuration. Agents cannot remove required topics or label their
+own customer-facing outputs low risk. Scores retain the `scope_alignment` name
+for compatibility but measure only lexical checks, never semantic assurance.
+The adapter records assessment scope and evidence limits in its audit record.

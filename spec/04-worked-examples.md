@@ -773,7 +773,7 @@ There is no retroactive re-evaluation of denied actions. An action that was deni
 
 ### Risk-Class Overrides
 
-Section 6 permits implementations to define risk-class overrides (e.g., read-only queries to non-sensitive data may fail-open during brief outages). If such overrides exist, they are declared in the authority grant and produce a different trace: the DENY is replaced with a conditional ALLOW annotated with `fail_open_override`. No such override is configured in this example.
+Core conformance prohibits fail-open overrides. An operator that enables an availability override must explicitly exclude those actions from its Core-conformance claim.
 
 ---
 
