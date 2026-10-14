@@ -1,8 +1,7 @@
 """Keyed rolling-window accounting for the in-memory governance fixture.
 
 Queries visit only the relevant counters. TYPE rate limits span grants; a
-DELEGATION_TREE query includes the caller's ancestors and descendants, but
-not siblings. Expiry is amortized over recorded events. Production needs
+DELEGATION_TREE rate limits aggregate the entire tree, including siblings. Expiry is amortized over recorded events. Production needs
 durable, atomic reservations and shared state across workers.
 """
 from collections import deque
@@ -24,7 +23,6 @@ def _resolve(path, obj):
 class RollingUsageIndex:
     def __init__(self):
         self.rate_windows = {}          # (grant, rule, scope, node) -> timestamps
-        self.direct_rate_windows = {}   # (grant, rule, node) -> direct calls only
         self.type_limits = {}           # agent type -> {(type, pattern, duration): max_count}
         self.type_windows = {}          # shared counters across all grants
         self.incomplete_type_limits = set()
@@ -47,12 +45,12 @@ class RollingUsageIndex:
         for limit in grant.rate_limits:
             if limit.get("scope", "INSTANCE") != "TYPE":
                 continue
-            self._register_type_rule(limit)
+            self._register_type_rule(limit, grant.agent_type)
 
-    def _register_type_rule(self, limit):
-        agent_type = limit.get("agent_type")
+    def _register_type_rule(self, limit, default_agent_type=None):
+        agent_type = limit.get("agent_type") or default_agent_type
         if not agent_type:
-            raise ValueError("TYPE rate limits require an agent_type")
+            raise ValueError("TYPE rate limits require an agent type")
         duration = parse_duration(limit["window"])
         key = (agent_type, limit["action_pattern"], duration.total_seconds())
         limits = self.type_limits.setdefault(agent_type, {})
@@ -74,7 +72,7 @@ class RollingUsageIndex:
         scope = limit.get("scope", "INSTANCE")
         duration = parse_duration(limit["window"])
         if scope == "TYPE":
-            key = self._register_type_rule(limit)
+            key = self._register_type_rule(limit, grant.agent_type)
             window = self._window(self.type_windows, key, now, duration)
             if key in self.incomplete_type_limits:
                 if window is not None:
@@ -84,17 +82,11 @@ class RollingUsageIndex:
         if scope not in ("INSTANCE", "DELEGATION_TREE"):
             raise ValueError("Unsupported rate-limit scope")
 
-        key = (grant.grant_id, index, scope, identity.instance_id)
+        owner = (identity.lineage_chain[0] if scope == "DELEGATION_TREE"
+                 else identity.instance_id)
+        key = (grant.grant_id, index, scope, owner)
         window = self._window(self.rate_windows, key, now, duration)
-        count = len(window) if window else 0
-        if scope == "DELEGATION_TREE":
-            for ancestor_id in identity.lineage_chain[:-1]:
-                ancestor_key = (grant.grant_id, index, ancestor_id)
-                direct = self._window(self.direct_rate_windows, ancestor_key, now, duration)
-                count += len(direct) if direct else 0
-                if count >= limit["max_count"]:
-                    return False
-        return count < limit["max_count"]
+        return window is None or len(window) < limit["max_count"]
 
     def _budget_window(self, key, now, duration):
         queue = self.budget_windows.get(key)
@@ -142,28 +134,17 @@ class RollingUsageIndex:
             scope = limit.get("scope", "INSTANCE")
             if scope == "TYPE":
                 continue  # Accounted for by the shared type registry.
-            if scope == "DELEGATION_TREE":
-                owners = identity.lineage_chain
-            elif scope == "INSTANCE":
-                owners = [identity.instance_id]
-            else:
+            if scope not in ("INSTANCE", "DELEGATION_TREE"):
                 raise ValueError("Unsupported rate-limit scope")
-            for owner in owners:
-                key = (grant.grant_id, index, scope, owner)
-                queue = self._window(self.rate_windows, key, now,
-                                     parse_duration(limit["window"]))
-                if queue is None:
-                    queue = deque()
-                    self.rate_windows[key] = queue
-                queue.append(now)
-            if scope == "DELEGATION_TREE":
-                key = (grant.grant_id, index, identity.instance_id)
-                direct = self._window(self.direct_rate_windows, key, now,
-                                      parse_duration(limit["window"]))
-                if direct is None:
-                    direct = deque()
-                    self.direct_rate_windows[key] = direct
-                direct.append(now)
+            owner = (identity.lineage_chain[0] if scope == "DELEGATION_TREE"
+                     else identity.instance_id)
+            key = (grant.grant_id, index, scope, owner)
+            queue = self._window(self.rate_windows, key, now,
+                                 parse_duration(limit["window"]))
+            if queue is None:
+                queue = deque()
+                self.rate_windows[key] = queue
+            queue.append(now)
 
         for index, budget in enumerate(grant.damage_budgets):
             if budget.get("evaluation_tier", 2) != 2:
@@ -190,13 +171,6 @@ class RollingUsageIndex:
                 self.rate_windows.pop(key, None)
             else:
                 self._window(self.rate_windows, key, now,
-                             parse_duration(grant.rate_limits[key[1]]["window"]))
-        for key in list(self.direct_rate_windows):
-            grant = grants.get(key[0])
-            if grant is None or key[1] >= len(grant.rate_limits):
-                self.direct_rate_windows.pop(key, None)
-            else:
-                self._window(self.direct_rate_windows, key, now,
                              parse_duration(grant.rate_limits[key[1]]["window"]))
         for key in list(self.type_windows):
             self._window(self.type_windows, key, now, timedelta(seconds=key[2]))
