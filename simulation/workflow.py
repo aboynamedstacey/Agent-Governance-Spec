@@ -45,6 +45,7 @@ class LocalExecutionBoundary:
         self.db.execute("CREATE TABLE sent (body TEXT)")
         self.available = True
         self.audit_guard = AuditHeadGuard(self.stack.chain, self.stack.genesis)
+        self.policy_snapshots = set()  # Content-addressed audit objects, written once
 
     def execute(self, agent_id, action, params):
         params = deepcopy(params)
@@ -62,14 +63,20 @@ class LocalExecutionBoundary:
         if not self.audit_guard.check_incremental():
             return {"decision": "DENY", "reason": "audit_integrity"}
         policy = json.dumps(identity.scope, sort_keys=True, separators=(",", ":"))
-        request_id = f"request-{len(self.stack.chain)}"
+        digest = hashlib.sha256(policy.encode()).hexdigest()
         try:
+            if digest not in self.policy_snapshots:
+                append_to_chain(self.stack.chain, "SHA256", self.stack.genesis,
+                                f"policy-{digest}", "PolicySnapshotStored", agent_id,
+                                policy_digest=digest, policy_snapshot=policy)
+                self.policy_snapshots.add(digest)
+            request_id = f"request-{len(self.stack.chain)}"
             append_to_chain(self.stack.chain, "SHA256", self.stack.genesis,
                             request_id, "WorkflowRequested", agent_id,
                             action=action, params=params, grant_id=identity.grant_id,
                             granted_by=self.stack.grants[identity.grant_id].granted_by,
-                            lineage=identity.lineage_chain, policy_snapshot=policy,
-                            policy_digest=hashlib.sha256(policy.encode()).hexdigest())
+                            lineage=identity.lineage_chain,
+                            policy_digest=digest)
             decision, _, reason = self.stack.evaluate(identity, action, params)
             decision_id = f"decision-{len(self.stack.chain)}"
             append_to_chain(self.stack.chain, "SHA256", self.stack.genesis,
