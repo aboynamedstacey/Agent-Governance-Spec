@@ -104,13 +104,26 @@ class RollingUsageIndex:
                 return None
         return queue
 
+    @staticmethod
+    def _budget_key(grant, index, budget, identity):
+        scope = budget.get("scope", "INSTANCE")
+        if scope == "INSTANCE":
+            owner = identity.instance_id
+        elif scope == "TYPE":
+            owner = identity.agent_type
+        elif scope == "DELEGATION_TREE":
+            owner = identity.lineage_chain[0]
+        else:
+            raise ValueError("Unsupported damage-budget scope")
+        return grant.grant_id, index, scope, owner
+
     def budget_permits(self, grant, index, budget, identity, params, now):
         value = _resolve(budget["accumulator"], params)
         if value is None:
             return True, 0, None
         if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
             return False, 0, value
-        key = (grant.grant_id, index, identity.instance_id)
+        key = self._budget_key(grant, index, budget, identity)
         window = self._budget_window(key, now, parse_duration(budget["window"]))
         accumulated = self.budget_totals[key] if window else 0
         return accumulated + value <= budget["threshold"], accumulated, value
@@ -154,7 +167,7 @@ class RollingUsageIndex:
                 continue
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError("Invalid budget amount")
-            key = (grant.grant_id, index, identity.instance_id)
+            key = self._budget_key(grant, index, budget, identity)
             queue = self._budget_window(key, now, parse_duration(budget["window"]))
             if queue is None:
                 queue = deque()
