@@ -1,6 +1,6 @@
 # Implementation status
 
-Revision **0.7.0-draft**, verified locally on Python 3.12 on 2026-09-17.
+Revision **0.7.0-draft**. GitHub Actions verification passed on Python 3.10 and 3.12 on 2026-10-14.
 
 ## Verification
 
@@ -8,8 +8,8 @@ Revision **0.7.0-draft**, verified locally on Python 3.12 on 2026-09-17.
 |---|---:|---:|---:|
 | Reference algorithms | 86 | 0 | 13 |
 | Integration harness | 30 | 0 | 0 |
-| Adversarial and contract regressions | 36 | 0 | 0 |
-| **Total** | **152** | **0** | **13** |
+| Adversarial and contract regressions | 48 | 0 | 0 |
+| **Total** | **164** | **0** | **13** |
 
 The 13 skips are retained stateful vector definitions; related lifecycle behavior
 runs in the integration suite. They are not counted as passing. The repository
@@ -31,8 +31,15 @@ and verifies the audit chain. CI is configured for Python 3.10 and 3.12.
 - Lexical output assessment and a channel-sensitive delivery gate.
 - Full-payload audit hashing with RFC 8785 canonicalization.
 - Executable SQLite workflow, regression suites, schemas, and migration notes.
+- Single-use escalation lifecycle checks: current grant and ancestor authority,
+  timeout boundaries, policy snapshots, global and rule-level constraints,
+  and non-executing approvals. Twelve adversarial regression tests added.
 
 ## Current boundaries
+
+Escalation approval in the reference stack records a review outcome but does
+not create an executable authorization token. Only a future trusted adapter can
+atomically consume an approved request after rechecking live authority.
 
 The reference stack is an in-memory test implementation. The local workflow
 replays agent requests against real database operations; it does not invoke an
