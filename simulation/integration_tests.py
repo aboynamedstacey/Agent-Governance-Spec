@@ -124,6 +124,7 @@ class GovernanceStack:
             granted_at=self.now, **kwargs,
         )
         self.grants[grant.grant_id] = grant
+        self.usage.register_grant(grant)
         self._audit("AuthorityGrantCreated", "system", agent_type=agent_type,
                      detail=f"By {granted_by}, TTL={ttl_seconds}s")
         return grant
