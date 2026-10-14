@@ -8,8 +8,8 @@ Revision **0.7.0-draft**. GitHub Actions verification passed on Python 3.10 and 
 |---|---:|---:|---:|
 | Reference algorithms | 86 | 0 | 13 |
 | Integration harness | 30 | 0 | 0 |
-| Adversarial and contract regressions | 61 | 0 | 0 |
-| **Total** | **177** | **0** | **13** |
+| Adversarial and contract regressions | 64 | 0 | 0 |
+| **Total** | **180** | **0** | **13** |
 
 The 13 skips are retained stateful vector definitions; related lifecycle behavior
 runs in the integration suite. They are not counted as passing. The repository
@@ -47,7 +47,7 @@ and verifies the audit chain. CI is configured for Python 3.10 and 3.12.
 - A local benchmark reports p50/p95/p99 latency and bytes per action. See
   [performance and storage profile](docs/performance-profile.md) for pilot
   targets, caveats, and production requirements.
-- Thirteen new security regressions cover bounded counters, cross-grant type
+- Sixteen new security regressions cover bounded counters, cross-grant type
   limits, ancestor/descendant scope, time-window expiry,
   audit-tail corruption, truncation, full verification, and side-effect denial.
 
