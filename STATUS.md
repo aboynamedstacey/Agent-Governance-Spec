@@ -8,8 +8,8 @@ Revision **0.7.0-draft**. GitHub Actions verification passed on Python 3.10 and 
 |---|---:|---:|---:|
 | Reference algorithms | 86 | 0 | 13 |
 | Integration harness | 30 | 0 | 0 |
-| Adversarial and contract regressions | 48 | 0 | 0 |
-| **Total** | **164** | **0** | **13** |
+| Adversarial and contract regressions | 58 | 0 | 0 |
+| **Total** | **174** | **0** | **13** |
 
 The 13 skips are retained stateful vector definitions; related lifecycle behavior
 runs in the integration suite. They are not counted as passing. The repository
@@ -35,7 +35,26 @@ and verifies the audit chain. CI is configured for Python 3.10 and 3.12.
   timeout boundaries, policy snapshots, global and rule-level constraints,
   and non-executing approvals. Twelve adversarial regression tests added.
 
+## Fast-path optimization
+
+- Rate and damage checks use keyed rolling windows instead of history-wide scans.
+  The in-memory action log is now a 256-entry diagnostic sample, not the
+  authorization source.
+- The execution fixture validates only the unverified audit suffix per action,
+  and exposes full-chain verification for off-path checks and quarantine.
+- Repeated policy snapshots are stored as content-addressed audit objects, with
+  policy digests in routine requests.
+- A local benchmark reports p50/p95/p99 latency and bytes per action. See
+  [performance and storage profile](docs/performance-profile.md) for pilot
+  targets, caveats, and production requirements.
+- Ten new security regressions cover bounded counters, time-window expiry,
+  audit-tail corruption, truncation, full verification, and side-effect denial.
+
 ## Current boundaries
+
+The optimized audit-head guard is trusted process-local state, not a durable
+independently anchored log. Concurrency, restart recovery, atomic budget
+reservations, and persistent external audit checkpoints are not implemented.
 
 Escalation approval in the reference stack records a review outcome but does
 not create an executable authorization token. Only a future trusted adapter can
