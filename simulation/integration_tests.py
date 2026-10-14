@@ -16,6 +16,7 @@ Run: python3 simulation/integration_tests.py
 
 import json
 import math
+from collections import deque
 from copy import deepcopy
 import sys
 import uuid
@@ -92,7 +93,7 @@ class GovernanceStack:
         self.grants: dict[str, Grant] = {}
         self.identities: dict[str, Identity] = {}
         self.audit: list[dict] = []
-        self.action_log: list[dict] = []  # Compatibility/test diagnostics only
+        self.action_log = deque(maxlen=256)  # Bounded diagnostic sample only
         self.usage = RollingUsageIndex()
         self.escalation_queue: list[dict] = []
         self.genesis = create_genesis("SHA256", "system", "test-chain")
