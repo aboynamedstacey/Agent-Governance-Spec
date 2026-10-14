@@ -49,8 +49,8 @@ Do not infer performance from the reference Python/SQLite benchmark alone.
 
 Maintain keyed rolling windows, exact window boundaries, and indexed aggregates,
 not repeated log scans. TYPE limits must aggregate across all grants with the
-same agent type; DELEGATION_TREE limits count ancestors and descendants without
-including unrelated siblings. New policy activation and raised limits require
+same agent type; DELEGATION_TREE limits aggregate all branches sharing the same root identity,
+including siblings, while independent root identities remain separate. New policy activation and raised limits require
 correct counter rehydration or fail-closed behavior.
 
 In production, counters and damage budgets MUST be
