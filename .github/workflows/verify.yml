@@ -18,4 +18,5 @@ jobs:
       - run: python simulation/integration_tests.py
       - run: python -m unittest discover -s simulation -p 'test_*.py'
       - run: python simulation/workflow.py
+      - run: python simulation/benchmark.py --actions 30 --preload 60
       - run: python simulation/demo.py
