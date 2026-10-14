@@ -426,6 +426,53 @@ class FastPathOptimizationTests(unittest.TestCase):
         self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
                          "RATE_LIMIT_EXCEEDED")
 
+    def test_type_limit_counts_other_grants_of_same_agent_type(self):
+        rules = [{"action_pattern": "mail.draft", "max_count": 1,
+                  "window": "60s", "scope": "TYPE", "agent_type": "indexed"}]
+        limited = self.gov.create_grant(
+            "indexed", self.scope, self.scope["authorized_actions"], 3600,
+            "human", rate_limits=rules)
+        limited_agent = self.gov.create_root_identity(limited)
+        # This other grant has no TYPE limit, but its actions still count.
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(
+            self.gov.evaluate(limited_agent, "mail.draft", self.params)[2],
+            "RATE_LIMIT_EXCEEDED")
+
+    def test_type_limit_excludes_other_agent_type(self):
+        rules = [{"action_pattern": "mail.draft", "max_count": 1,
+                  "window": "60s", "scope": "TYPE", "agent_type": "indexed"}]
+        limited = self.gov.create_grant(
+            "indexed", self.scope, self.scope["authorized_actions"], 3600,
+            "human", rate_limits=rules)
+        limited_agent = self.gov.create_root_identity(limited)
+        different = self.gov.create_grant(
+            "other-type", self.scope, self.scope["authorized_actions"], 3600, "human")
+        different_agent = self.gov.create_root_identity(different)
+        self.assertEqual(self.gov.evaluate(different_agent, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(limited_agent, "mail.draft", self.params)[0], "ALLOW")
+
+    def test_delegation_tree_counts_ancestors_but_not_siblings(self):
+        self.grant.rate_limits = [{
+            "action_pattern": "mail.draft", "max_count": 3,
+            "window": "1h", "scope": "DELEGATION_TREE"}]
+        child_scope = draft_scope()
+        first, error = self.gov.create_child_identity(
+            self.root, "helper", child_scope, child_scope["authorized_actions"])
+        self.assertIsNone(error)
+        sibling, error = self.gov.create_child_identity(
+            self.root, "helper", child_scope, child_scope["authorized_actions"])
+        self.assertIsNone(error)
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(sibling, "mail.draft", self.params)[0], "ALLOW")
+        # Root's action counts for the child. The sibling's does not.
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[0], "ALLOW")
+        self.assertEqual(self.gov.evaluate(first, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+        self.assertEqual(self.gov.evaluate(self.root, "mail.draft", self.params)[2],
+                         "RATE_LIMIT_EXCEEDED")
+
     def test_usage_history_stays_bounded(self):
         for n in range(350):
             self.gov.evaluate(self.root, "mail.draft", self.params)
