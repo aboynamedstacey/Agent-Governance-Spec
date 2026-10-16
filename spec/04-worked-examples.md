@@ -315,7 +315,7 @@ evt-024 (ActionExecuted: SUCCESS)
         ← evt-020 (ActionRequested: gmail.messages.send)
 ```
 
-Any auditor can reconstruct: this email was sent because human:jane@org approved it after reviewing the content, the recipient, and the agent's lineage. The authority for the agent traces to human:alex@org via the grant. Two humans are in the chain. The decision is fully traceable.
+Any auditor can reconstruct: this email was sent because human:jane@org approved it after reviewing the content, the recipient, and the agent's lineage. The agent's authority traces to human:alex@org through the grant, so the chain contains two humans and the decision is fully traceable.
 
 ---
 

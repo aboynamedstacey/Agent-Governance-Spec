@@ -593,7 +593,7 @@ An optional implementation performance profile with measurement protocol, deploy
 
 ### 3.4 Execution Boundary
 
-**Responsibility:** The proxy through which all agent actions execute. Ensures agents never have direct access to tools, APIs, or credentials. Enforces attenuation decisions. Captures results for the Audit Ledger.
+**Responsibility:** The proxy through which all agent actions execute. It ensures agents never have direct access to tools, APIs, or credentials, enforces attenuation decisions, and captures results for the Audit Ledger.
 
 #### Data Flow
 
@@ -810,7 +810,7 @@ D.6 defines evidence binding, replay protection, and score updates. Appropriate
 escalation is not a failure. Evidence must come from an authenticated observer,
 not the agent. Inactivity never repairs adverse evidence. Scores are heuristic
 routing inputs and require deployment-specific calibration.
-Trust adjustment is always asynchronous. It never blocks the action path.
+Trust adjustment is always asynchronous and never blocks the action path.
 
 #### Delegation Trust Attenuation
 
@@ -1118,7 +1118,7 @@ Every authority grant traces back to a human decision. The delegation chain may 
 
 ### Guarantee 3: Authority Only Attenuates
 
-When Agent A spawns Agent B, Agent B's authority scope is at most a subset of Agent A's delegatable scope. It is never a superset. The Identity Service enforces this at minting time. There are no exceptions.
+When Agent A spawns Agent B, Agent B's authority scope is at most a subset of Agent A's delegatable scope and is never a superset. The Identity Service enforces this rule at minting time, without exception.
 
 ### Guarantee 4: Agent Isolation
 
@@ -1134,7 +1134,7 @@ Agent isolation exists on a spectrum that depends on the integration model. The 
 
 ### Guarantee 5: Credential Isolation
 
-Agents never hold credentials, API keys, connection strings, or authentication tokens. The Execution Boundary holds all credentials and resolves resource references to credentials at execution time. Agent context is credential-free.
+Agents never hold credentials, API keys, connection strings, or authentication tokens. The Execution Boundary holds all credentials and resolves resource references to credentials at execution time, so agent context never contains credentials.
 
 ### Guarantee 6: Decision Traceability
 
