@@ -50,10 +50,10 @@ Agent
 This is the entire synchronous cost of a routine action. There are no trust lookups, no historical scans, no human routing, no compliance mapping, and no full-context retrieval on this path.
 
 Components with fast-path touchpoints:
-- **Policy Gate (Tiers 1-2):** Cached rule evaluation. No external state required.
-- **Execution Boundary:** Proxies the action. Holds credentials. Returns result.
+- **Policy Gate (Tiers 1-2):** Evaluates rules against cached policy and needs no external state.
+- **Execution Boundary:** Holds the credentials, proxies the action, and returns the result.
 - **Audit Ledger:** Append or queue. If the ledger is temporarily unreachable, entries queue locally up to a bounded threshold. The write is non-blocking on the action path.
-- **Identity Service:** Not consulted per-action. Identity is validated locally against the signed token. The Identity Service is consulted only at registration and spawn time.
+- **Identity Service:** Identity is validated locally against the signed token on each action, so the Identity Service is consulted only at registration and spawn time.
 
 **Lane 2: Exception Path** *(runs only when Tier 1-2 cannot safely resolve)*
 
@@ -67,8 +67,8 @@ These paths are triggered by policy configuration or risk classification, not by
 
 Components with exception-path touchpoints:
 - **Policy Gate (Tier 3):** Behavioral envelope, aggregate thresholds, velocity analysis. Requires Trust Engine and audit history. *(Extension: Trust-Adjusted Evaluation)*
-- **Escalation Router:** Pauses the action. Routes to human. Waits for resolution or timeout. *(Extension: Adaptive Escalation)*
-- **Output Evaluator:** Scope alignment check. Synchronous only for high-risk channels (customer-facing, agent-to-agent). *(Extension: Output Governance)*
+- **Escalation Router:** Pauses the action, routes it to a human reviewer, and waits for a resolution or timeout. *(Extension: Adaptive Escalation)*
+- **Output Evaluator:** Checks scope alignment and runs synchronously only for high-risk channels (customer-facing, agent-to-agent). *(Extension: Output Governance)*
 
 **Lane 3: Control Plane** *(runs at setup time, asynchronously, or periodically)*
 
@@ -326,10 +326,10 @@ AuthorityGrant {
 
 #### Guarantees
 
-- Every grant traces to a human identity. No system-generated grants.
+- Every grant traces to a human identity; the system cannot generate grants on its own.
 - Every grant has a TTL. The implementation MUST reject grants without expiration.
 - Grant revocation propagates to all Policy Gate instances within a defined SLA (implementation-specific, but MUST be documented).
-- Policy history is retained. No version is deleted. Rollback creates a new version that restores the content of a prior version.
+- Policy history is retained, and no version is deleted. Rollback creates a new version that restores the content of a prior version.
 - **Termination completeness.** Every grant termination, whether `REVOKED`, `CASCADED`, or `EXPIRED`, MUST produce exactly one `AuthorityGrantTerminated` event and MUST be reflected in the grant struct (`terminated = true`, `terminated_at` set, `terminated_by` set for REVOKED or null for system-driven, `termination_reason` set to the appropriate value). TTL elapse is a termination, not a computed non-state. Whether implementations detect TTL elapse eagerly (scheduled sweep) or lazily (on-access check that fires the event and updates the struct before any denial) is implementation-defined. The invariant is that by the time any Policy Gate evaluation runs against an expired grant, the `AuthorityGrantTerminated` event has been emitted and the struct reflects termination.
 
 #### Policy Validation
@@ -411,7 +411,7 @@ AgentIdentity {
 - Identities are signed by the Identity Service, not by parent agents. A compromised parent cannot mint children with arbitrary authority.
 - Delegation attenuation is enforced at minting time. The Identity Service MUST reject any child identity request where the child's scope is not a subset of the parent's delegatable scope.
 - Delegation depth is capped per authority grant. The Identity Service MUST reject spawn requests that exceed the delegation depth limit.
-- Lineage chains are immutable once created. No entity can modify an identity's ancestry.
+- Lineage chains are immutable once created, so no entity can modify an identity's ancestry.
 - An agent cannot modify its own identity record.
 
 #### Delegation Attenuation
@@ -515,20 +515,20 @@ Actions are evaluated through a tiered pipeline with early exit. Most actions re
 
 **Tier 1: Deterministic Rule Evaluation**
 
-Static checks that require no external state. Evaluated against the local policy cache.
+Tier 1 runs static checks against the local policy cache and needs no external state.
 
 - Is the agent identity valid and unexpired?
 - Is this action type within the agent's authority scope?
 - Has the agent exceeded its rate limit for this action type?
 - Is the delegation chain valid (no broken links, no depth exceeded)?
 
-Resolution at Tier 1 is microsecond-scale. An in-memory rule evaluation against cached policy. No network calls.
+Resolution at Tier 1 is microsecond-scale: an in-memory rule evaluation against cached policy, with no network calls.
 
 Expected resolution rate: 90%+ of all actions.
 
 **Tier 2: Parameter and Constraint Evaluation**
 
-Inspects action parameters against policy constraints. Still deterministic, but requires reading the action's specifics.
+Tier 2 inspects action parameters against policy constraints. It is still deterministic, but it must read the action's specifics.
 
 - "Can modify records, but not more than 50 in a single operation." Count the records.
 - "Can send communications, but only to domains on the approved list." Check the domain.
@@ -541,7 +541,7 @@ Resolution at Tier 2 is sub-millisecond to low millisecond.
 
 **Tier 3: Pattern and Context Evaluation**
 
-Evaluates the action against behavioral history and aggregate context. Requires querying the Trust Engine and potentially the Audit Ledger.
+Tier 3 evaluates the action against behavioral history and aggregate context. It queries the Trust Engine and, in some cases, the Audit Ledger.
 
 - Is this action within the agent's behavioral envelope for this capability class?
 - Has this delegation chain been used successfully for similar actions?
@@ -750,7 +750,7 @@ The policy for which outputs require synchronous vs. asynchronous evaluation is 
 
 #### Guarantees
 
-- Every output to a synchronous channel is evaluated before release. No bypass path.
+- Every output to a synchronous channel is evaluated before release, and no path bypasses that evaluation.
 - Suppressed outputs are recorded in the Audit Ledger with the reason for suppression.
 - The Output Evaluator does not modify outputs. It releases, suppresses, escalates, or requests revision. When REVISE is returned, the findings are delivered to the agent framework to prompt a corrected output. The revised output is re-evaluated before release.
 
@@ -764,7 +764,7 @@ The policy for which outputs require synchronous vs. asynchronous evaluation is 
 
 #### Trust Model
 
-Trust is not a single score. It is scoped per capability class.
+Trust is scoped per capability class.
 
 ```
 TrustProfile {
@@ -828,7 +828,7 @@ Capability separation reduces cross-capability trust farming. It does not preven
 
 #### Guarantees
 
-- Trust is capability-scoped. No global trust score.
+- Trust is scoped per capability class; no global trust score exists.
 - Trust adjustment is based on observed outcomes from the Audit Ledger, not agent self-assessment.
 - Trust only attenuates through delegation.
 - An agent cannot query or modify its own trust profile.
@@ -908,7 +908,7 @@ The Escalation Router is designed to defeat automation bias, the documented tend
 
 Every human escalation resolution generates a `candidate_rule`, a proposed policy rule that, if promoted, would allow automated resolution of similar future cases. This is how the system learns, as human judgment is encoded into policy over time.
 
-Candidate rules do not auto-promote. They enter a governed pipeline:
+Candidate rules do not promote automatically. Each one passes through a governed pipeline:
 
 1. Candidate rule is generated from the escalation resolution.
 2. Candidate is reviewed for policy consistency (does it conflict with existing rules?).
@@ -1357,7 +1357,7 @@ This section is non-normative. It provides recommendations for teams implementin
 
 ### 10.1 Phased Rollout
 
-Implementing the full specification at once is neither necessary nor advisable.
+Implement the specification in phases. Deploying all of it at once is neither necessary nor advisable.
 
 **Phase 1: Identity and Authority**
 Deploy the Authority Registry and Agent Identity Service. Begin issuing identities and authority grants. This is the foundation, since without identity and authority nothing else can operate.

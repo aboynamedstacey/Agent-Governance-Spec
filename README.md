@@ -12,10 +12,11 @@ reference algorithms.
 
 ## Design
 
-Agents are untrusted processes. They request actions; the governance layer decides
-whether those actions can proceed. Credentials stay at the execution boundary.
-Every grant has an owner, a scope, and an expiration. Child agents receive a
-subset of their parent's authority.
+The design treats agents as untrusted processes. An agent requests an action,
+and the governance layer decides whether it can proceed. Credentials stay at the
+execution boundary, out of the agent's reach. Every grant has an owner, a scope,
+and an expiration, and a child agent receives only a subset of its parent's
+authority.
 
 ### Core components
 
@@ -71,12 +72,13 @@ DENY exceptions, parameter caps, failure branches, and output controls. A child
 cannot gain authority by changing the decision attached to an existing action
 pattern or by supplying execution rules different from its validated scope.
 
-**Trust follows outcomes.** Permission to act is not proof of a good result.
-Verified successes and failures adjust trust; ALLOW, DENY, and ESCALATE do not.
-Evidence replay cannot inflate scores, and inactivity does not clear tampering.
+**Trust follows outcomes.** Verified successes and failures adjust trust scores.
+Policy decisions (ALLOW, DENY, ESCALATE) do not, because permission to act says
+nothing about the result. Replayed evidence cannot inflate a score, and
+inactivity does not clear a tampering record.
 
-**Output checks have an enforcement path.** Lexical checks feed a delivery gate.
-High-risk outputs require review, even when their keywords match the task.
+**Output checks have an enforcement path.** Lexical checks feed a delivery gate,
+which sends high-risk outputs to review even when their keywords match the task.
 
 **Audit evidence covers the decision.** Hashes cover the full recorded payload,
 using RFC 8785 canonicalization. The workflow links execution to its request,
