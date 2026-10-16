@@ -18,9 +18,9 @@ The specification rests on a single premise, that an AI agent is **an untrusted 
 
 ### Design Principles
 
-1. **Containment.** The governance layer is built to constrain agents rather than to collaborate with them. It does not negotiate, it does not rely on an agent's account of its own conduct, and it does not defer to an agent's judgment about what it should be permitted to do.
+1. **Containment.** The governance layer constrains agents and does not collaborate with them. It does not negotiate, rely on an agent's account of its own conduct, or defer to an agent's judgment about what it should be permitted to do.
 
-2. **A single governance surface.** What an agent does, through tool calls, API invocations, and the spawning of further agents, and what an agent says, through its text, recommendations, and instructions to other agents, are governed under one policy framework rather than two disconnected ones.
+2. **A single governance surface.** What an agent does, through tool calls, API invocations, and the spawning of further agents, and what an agent says, through its text, recommendations, and instructions to other agents, are governed under one policy framework.
 
 3. **Authority of human origin.** Every action an agent takes traces back to a human decision along an unbroken chain of delegation, and where that chain is broken, the action carries no authority.
 
@@ -107,7 +107,7 @@ Most organizations underestimate scope drift because it does not present as a se
 
 When Agent A spawns Agent B, the question is what Agent B is then able to do, and in most current frameworks the answer is "whatever Agent A can do, or more." That makes privilege escalation a routine part of operation: a research agent spawns a "helper" with access to the same tools, and an unaudited subprocess now holds production API keys.
 
-Authority laundering extends to breadth as well as depth. An agent that spawns a hundred sub-agents, each delegating further, can create a tree of more than a thousand relationships in seconds. That delegation topology differs fundamentally from a human organization, and it calls for explicit architectural controls.
+Authority laundering extends to breadth as well as depth. An agent that spawns a hundred sub-agents, each delegating further, can create a tree of more than a thousand relationships in seconds. No human organization has a delegation topology like that, and it calls for explicit architectural controls.
 
 **Threat 3: Prompt Injection and Manipulation**
 
@@ -125,11 +125,11 @@ Standard application logs record what happened. Governance requires a record of 
 
 **Threat 5: Governance System Failure**
 
-The governance layer is itself a high-value target and a potential point of failure. If the control plane goes down and agents default to "allow," governance disappears; if they default to "deny," operations halt. The governance system's own security, availability, and failure modes must therefore be designed explicitly rather than left to chance.
+The governance layer is itself a high-value target and a potential point of failure. If the control plane goes down and agents default to "allow," governance disappears; if they default to "deny," operations halt. The governance system's own security, availability, and failure modes must therefore be designed explicitly.
 
 ### 1.2 Threat Model Boundaries
 
-This specification does not place the "adversarial superintelligent AI" at the center of its threat model. That scenario is not dismissed as impossible; it is simply the wrong design frame for enterprise governance. The great majority of agent failures in enterprise environments are mundane, a matter of scope drift, misconfiguration, inherited permissions, and bad inputs. An architecture that handles those well constrains adversarial behavior as a side effect, whereas an architecture built primarily around adversarial AI tends to be over-engineered for the common case and still inadequate for the exotic one.
+This specification does not place the "adversarial superintelligent AI" at the center of its threat model. That scenario is possible, but it is the wrong design frame for enterprise governance. The great majority of agent failures in enterprise environments are mundane, a matter of scope drift, misconfiguration, inherited permissions, and bad inputs. An architecture that handles those well constrains adversarial behavior as a side effect, whereas an architecture built primarily around adversarial AI tends to be over-engineered for the common case and still inadequate for the exotic one.
 
 The specification also does not replace network security, infrastructure security, or application security. It layers on top of existing security architectures, addressing the governance gap specific to autonomous AI agents.
 
@@ -627,7 +627,7 @@ The Execution Boundary is architecturally distinct from the Policy Gate: the Gat
 
 ### 3.5 Audit Ledger
 
-**Responsibility:** Append-only, immutable, causally chained record of every action, decision, and output in the system. The Audit Ledger is more than a log; it is a causal chain that can reconstruct the complete history of any agent's operation, including why each action was permitted.
+**Responsibility:** Append-only, immutable, causally chained record of every action, decision, and output in the system. The ledger forms a causal chain that can reconstruct the complete history of any agent's operation, including why each action was permitted.
 
 #### Audit Entry
 
@@ -653,7 +653,7 @@ AuditEntry {
 
 Each entry links to the entry that caused it via `causal_parent`. Agent B's action links back to Agent A's spawn action, which links back to the human's task initiation. Walking the causal chain backward from any action reconstructs why that action happened: which human authorized the chain of delegation, through which agents, and under which policies.
 
-This is distinct from chronological logging. Two actions may occur at the same time with no causal relationship. Two actions may be separated by hours but be causally linked. The causal chain captures the actual decision path, not the timeline.
+Causal order differs from chronological order. Two simultaneous actions may be unrelated, and two actions hours apart may be causally linked. The causal chain records the decision path.
 
 #### Context Snapshots
 
@@ -731,9 +731,9 @@ OutputEvaluationResponse {
 }
 ```
 
-**REVISE decision:** When an output is partially in-scope but contains specific violations, the Output Evaluator returns REVISE instead of SUPPRESS. REVISE returns the output to the agent framework with structured `findings` that identify what is out of scope. The agent framework uses these findings to prompt the agent to produce a corrected output. The revised output is re-evaluated. REVISE preserves the compliant portions of the output rather than discarding everything.
+**REVISE decision:** When an output is partially in-scope but contains specific violations, the Output Evaluator returns REVISE instead of SUPPRESS. REVISE returns the output to the agent framework with structured `findings` that identify what is out of scope. The agent framework uses these findings to prompt the agent to produce a corrected output. The revised output is re-evaluated. REVISE preserves the compliant portions of the output.
 
-**Design note:** The Output Evaluator does not modify outputs directly. SUPPRESS blocks an output entirely, while REVISE provides structured feedback, and the agent framework, rather than the governance layer, handles the revision interaction. This maintains the principle that the governance layer constrains agents without collaborating with them: it says "this is wrong and here is why," and it does not say "let me fix it for you."
+**Design note:** The Output Evaluator does not modify outputs directly. SUPPRESS blocks an output entirely. REVISE provides structured feedback, and the agent framework handles the revision interaction. This maintains the principle that the governance layer constrains agents without collaborating with them: it says "this is wrong and here is why," and it does not say "let me fix it for you."
 
 #### Synchronous vs. Asynchronous Evaluation
 
@@ -784,7 +784,7 @@ TrustProfile {
 
 An agent type trusted for data reads is not automatically trusted for data writes. An agent type trusted for internal communications is not automatically trusted for customer-facing communications. Trust is earned per capability class based on observed behavior in that class.
 
-To be explicit: a trust tier of HIGH for `data_read` means "this agent's data read actions can be resolved with minimal evaluation overhead." It does not mean "this agent can read more data." The scope of what the agent may read is defined entirely by its authority grant. Trust adjusts the cost of evaluation, not the boundary of permission.
+A trust tier of HIGH for `data_read` means "this agent's data read actions can be resolved with minimal evaluation overhead." It does not mean "this agent can read more data." The agent's authority grant alone defines what it may read.
 
 #### Trust Tiers
 
@@ -838,7 +838,7 @@ Capability separation reduces cross-capability trust farming. It does not preven
 
 ### 3.8 Escalation Router *(Extension: Adaptive Escalation)*
 
-**Responsibility:** Routes actions that automated evaluation cannot resolve to human decision-makers. It shapes the human interaction so that review is substantive rather than a rubber stamp, and it manages the feedback loop from human decisions to automated rule candidates.
+**Responsibility:** Routes actions that automated evaluation cannot resolve to human decision-makers. It structures each review so the human makes a substantive decision, and it manages the feedback loop from human decisions to automated rule candidates.
 
 #### Escalation Package
 
@@ -901,7 +901,7 @@ The Escalation Router is designed to defeat automation bias, the documented tend
 
 - **Justification is mandatory.** The reviewer cannot approve or deny without providing a reason. "Looks fine" is not a justification. The implementation SHOULD validate that the justification references specific aspects of the action or context.
 - **Asymmetric defaults.** For high-risk action classes, the default is DENY. The reviewer must actively override the denial and justify why the action should proceed.
-- **Tier failure context.** The reviewer sees WHY each automated tier could not resolve. This frames the review around the specific ambiguity the system needs resolved, rather than as a request to approve.
+- **Tier failure context.** The reviewer sees WHY each automated tier could not resolve. This frames the review around the specific ambiguity the system needs resolved.
 - **Sampling and audit.** Not every escalation needs unique deep review. The implementation MAY support statistical sampling, flagging some escalations for deep review while others receive standard review. All deep-review decisions are themselves audited.
 
 #### Feedback Loop
@@ -916,7 +916,7 @@ Candidate rules do not promote automatically. Each one passes through a governed
 4. Promoted rule is versioned and deployed through the normal policy update process.
 5. Rule promotion is recorded in the Audit Ledger.
 
-If escalation rates exceed a configured threshold (implementation-defined), this is a signal that policies are underspecified and need revision, rather than a sign that more humans should review more actions.
+If escalation rates exceed a configured threshold (implementation-defined), the policies are likely underspecified and need revision. Adding reviewers does not address the cause.
 
 #### Guarantees
 
@@ -1277,7 +1277,7 @@ Adapters are implementation details, not part of the specification. The specific
 
 The specification captures comprehensive governance data: authority chains, policy evaluations, decision traces, trust histories, and escalation resolutions. This data provides a control and record substrate that can be mapped to regulatory obligations. The specification does not itself constitute compliance with any regulation, though it supports the production of evidence for compliance programs.
 
-A **compliance projection** is a module that maps the specification's native event data to a specific regulatory framework's reporting requirements. Projections are configuration rather than architecture. Adopting this specification does not by itself amount to compliance with any regulatory framework; it provides the underlying control and audit infrastructure that compliance programs require.
+A **compliance projection** is a module that maps the specification's native event data to a specific regulatory framework's reporting requirements. Projections are configuration and add no architectural components. Adopting this specification does not by itself amount to compliance with any regulatory framework; it provides the underlying control and audit infrastructure that compliance programs require.
 
 ### 8.1 Projection Model
 

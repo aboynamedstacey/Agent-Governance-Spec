@@ -389,7 +389,7 @@ in `[0, 1]`, initially `0.5`. They route scrutiny within existing authority and
 MUST NOT enlarge permissions. The constants below are deterministic reference
 parameters, not empirically calibrated estimates of reliability.
 
-### Verified outcomes, not permission decisions
+### Score inputs
 
 | Input | Score effect |
 |---|---|
@@ -561,5 +561,5 @@ invalidate that approval. The reference gate has no caller-supplied bypass.
 Task declarations and channel risk classification MUST originate from trusted
 authority configuration. Agents cannot remove required topics or label their
 own customer-facing outputs low risk. Scores retain the `scope_alignment` name
-for compatibility but measure only lexical checks, never semantic assurance.
+for compatibility, but they measure lexical checks only and provide no semantic assurance.
 The adapter records assessment scope and evidence limits in its audit record.

@@ -933,4 +933,4 @@ Both evaluations, the rejected first draft and the released second draft, are in
 
 ### What the Governance Layer Does Not Do
 
-The Output Evaluator does not rewrite the draft. It does not select language, and it does not collaborate with the agent on what the email should say. It releases, suppresses, escalates, or returns findings. Per the design principle in Section 3.6, the governance layer constrains agents without collaborating with them: it says "this is wrong and here is why," and it does not say "let me fix it for you." The revision loop is the agent framework's responsibility, not the governance layer's.
+The Output Evaluator does not rewrite the draft, select language, or help decide what the email should say. It releases, suppresses, escalates, or returns findings. Under the design principle in Section 3.6, the agent framework owns the revision loop.

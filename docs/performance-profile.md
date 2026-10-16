@@ -69,8 +69,8 @@ The reference `AuditHeadGuard` checks the previously pinned head and validates
 only newly appended entries during a routine action. The entire chain can be
 checked separately via `verify_audit_full()`, which quarantines the guard if
 verification fails. A historical mutation outside the recent suffix may be
-invisible until the deep verifier runs. This is an explicitly documented
-limitation, not a guarantee of immediate comprehensive tamper detection.
+invisible until the deep verifier runs. This limitation is documented, and
+the guard does not guarantee immediate, comprehensive tamper detection.
 
 A production deployment needs independently protected, durable chain-head
 checkpoints, append-only access controls, recovery after crash, and verified
